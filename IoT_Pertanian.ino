@@ -32,42 +32,21 @@
 #define LIGHT_LOW 750
 #define LIGHT_MEDIUM 400
 #define RAIN_LOW 990
-#define RAIN_MEDIUM 890
+#define RAIN_MEDIUM 920
 
 // ----- Timing Settings -----
-#define LCD_MODE_CHANGE_INTERVAL 5000
-#define LCD_UPDATE_INTERVAL 1000
-#define LCD_READINGS_PER_MODE 5
-#define WIFI_RECONNECT_ATTEMPTS 3
-#define SERVER_SEND_INTERVAL 1000  // Changed to 60 seconds to reduce DB load
 #define WATCHDOG_TIMEOUT 8000
 #define VALID_YEAR_THRESHOLD 2025
-#define ERROR_DISPLAY_TIMEOUT 5000
-#define NTP_UPDATE_INTERVAL 86400000
-#define HTTP_TIMEOUT 10000
-#define DB_RETRY_INTERVAL 60000
-#define SENSOR_READ_INTERVAL 1000
 
 // ----- Time Zone GMT +7 -----
 #define GMT_OFFSET_SECONDS 25200
 
 // ----- System States -----
 enum SystemState {
-  STATE_INIT,
   STATE_READ_SENSORS,
-  STATE_EVALUATE_WATERING,
-  STATE_WATERING,
   STATE_DISPLAY_DATA,
   STATE_SEND_DATA,
-  STATE_ERROR
-};
-
-// ----- Task States -----
-enum TaskState {
-  TASK_IDLE,
-  TASK_RUNNING,
-  TASK_COMPLETED,
-  TASK_FAILED
+  STATE_WATERING
 };
 
 // ----- Error Codes -----
@@ -97,7 +76,7 @@ HttpClient http(wifi, server, port);
 
 // For NTP time synchronization
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", GMT_OFFSET_SECONDS, NTP_UPDATE_INTERVAL);
+NTPClient timeClient(ntpUDP, "pool.ntp.org", GMT_OFFSET_SECONDS);
 bool timeInitialized = false;
 unsigned long lastNTPUpdateTime = 0;
 
@@ -106,21 +85,19 @@ DHT dht(DHTPIN, DHTTYPE);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // System state and error tracking
-SystemState currentState = STATE_INIT;
+SystemState currentState = STATE_READ_SENSORS;
 ErrorCode currentError = ERROR_NONE;
 ErrorCode lastDisplayedError = ERROR_NONE;
 char errorMessage[32] = "";
-unsigned long stateStartTime = 0;
-unsigned long errorStartTime = 0;
 
-// Flag to track if an error has been displayed
-bool errorDisplayed = false;
+// Global timing variables
+unsigned long lastStateChangeTime = 0;
+const unsigned long STATE_DURATION = 1000; // 1 second per state
 
-// LCD display variables
-byte displayMode = 0;
-byte readingCount = 0;
-unsigned long lastLCDUpdateTime = 0;
-unsigned long lastLCDModeChangeTime = 0;
+// Buffer for formatting strings
+char msgBuffer[150];
+char timeStampBuffer[25];
+char valueBuffer[10];
 
 // Sensor data structure to organize readings
 struct SensorData {
@@ -129,33 +106,19 @@ struct SensorData {
   int ldrValue;
   int rainValue;
   int airQuality;
-  float airQualityPPM;
   int soilMoisture;
   bool isValid;
   unsigned long timestamp;
 } sensorData;
 
-// Database communication tracking
-int dataTransmissionErrors = 0;
-unsigned long lastServerSendTime = 0;
-unsigned long lastDBRetryTime = 0;
-unsigned long lastSensorReadTime = 0;
+// Add display mode tracking
+byte displayMode = 0;
+const byte NUM_DISPLAY_MODES = 6;  // Number of different display modes
 
-// Buffer for formatting strings
-char msgBuffer[150];
-char timeStampBuffer[25];
-char valueBuffer[10];
-
-// Task management
-TaskState dbTaskState = TASK_IDLE;
-TaskState sensorTaskState = TASK_IDLE;
-TaskState displayTaskState = TASK_IDLE;
-TaskState wateringTaskState = TASK_IDLE;
-
-unsigned long dbTaskStartTime = 0;
-unsigned long sensorTaskStartTime = 0;
-unsigned long displayTaskStartTime = 0;
-unsigned long wateringTaskStartTime = 0;
+// Add watering control variables
+unsigned long pumpStartTime = 0;
+bool isPumpActive = false;
+const unsigned long MAX_PUMP_DURATION = 30000; // 30 seconds maximum pump time
 
 // Function to get status text based on sensor value with inversion parameter
 const char* getSensorStatus(int value, int lowThreshold, int mediumThreshold, bool invertLogic = false) {
@@ -178,29 +141,18 @@ const char* getSensorStatus(int value, int lowThreshold, int mediumThreshold, bo
   }
 }
 
-float convertToCO2PPM(int analogValue) {
-  float voltage = analogValue * (5.0 / 1023.0);
-  float rs = ((5.0 * 10.0) / voltage) - 10.0;
-  float r0 = 76.63;
-  float ratio = rs / r0;
-  float ppm = 100.0 * pow(ratio, -1.53);
-  
-  return ppm;
-}
-
-// Non-blocking function to connect to MySQL database
-void startDatabaseConnection() {
-  if (dbTaskState == TASK_IDLE) {
-    if (!checkWiFi()) {
-      Serial.println(F("Warning: WiFi not connected, skipping database connection"));
-      currentError = ERROR_WIFI;
-      dbTaskState = TASK_FAILED;
-      return;
-    }
-    
-    Serial.println(F("Starting database connection..."));
-    dbTaskState = TASK_RUNNING;
-    dbTaskStartTime = millis();
+// Remove the convertToCO2PPM function and replace with getAirQualityLevel
+const char* getAirQualityLevel(int sensorValue) {
+  if (sensorValue < 200) {
+    return "EXCELLENT";
+  } else if (sensorValue < 400) {
+    return "GOOD";
+  } else if (sensorValue < 600) {
+    return "MODERATE";
+  } else if (sensorValue < 800) {
+    return "POOR";
+  } else {
+    return "VERY POOR";
   }
 }
 
@@ -210,26 +162,21 @@ bool checkWiFi() {
     snprintf(msgBuffer, sizeof(msgBuffer), "Warning: WiFi disconnected. Attempting to reconnect...");
     Serial.println(msgBuffer);
     
-    for (int attempt = 0; attempt < WIFI_RECONNECT_ATTEMPTS; attempt++) {
-      WiFi.begin(ssid, password);
-      unsigned long startTime = millis();
-      while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < 10000) {
-        WDT.refresh();
-        delay(500);
-        Serial.print(".");
-      }
-      
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.println(F("\nReconnected to WiFi!"));
-        currentError = ERROR_NONE; // Clear WiFi error if connection succeeds
-        return true;
-      } else {
-        snprintf(msgBuffer, sizeof(msgBuffer), "\nAttempt %d failed. Retrying...", attempt + 1);
-        Serial.print(msgBuffer);
-      }
+    WiFi.begin(ssid, password);
+    unsigned long startTime = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < 10000) {
+      WDT.refresh();
+      delay(500);
+      Serial.print(".");
     }
     
-    Serial.println(F("Warning: Failed to reconnect to WiFi after multiple attempts."));
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println(F("\nReconnected to WiFi!"));
+      currentError = ERROR_NONE;
+      return true;
+    }
+    
+    Serial.println(F("Warning: Failed to reconnect to WiFi."));
     return false;
   }
   return true;
@@ -261,10 +208,6 @@ void getFormattedTime(char* buffer, size_t bufferSize, bool includeSeconds = tru
     }
   }
   
-  if (millis() - lastNTPUpdateTime >= NTP_UPDATE_INTERVAL) {
-    updateNTPTime();
-  }
-  
   unsigned long epochTime = timeClient.getEpochTime();
   time_t rawtime = epochTime;
   struct tm* ti;
@@ -278,428 +221,6 @@ void getFormattedTime(char* buffer, size_t bufferSize, bool includeSeconds = tru
     snprintf(buffer, bufferSize, "%04d-%02d-%02d %02d:%02d", 
             ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday, 
             ti->tm_hour, ti->tm_min);
-  }
-}
-
-// Non-blocking function to start reading sensors
-void startSensorReading() {
-  if (sensorTaskState == TASK_IDLE && millis() - lastSensorReadTime >= SENSOR_READ_INTERVAL) {
-    sensorTaskState = TASK_RUNNING;
-    sensorTaskStartTime = millis();
-    lastSensorReadTime = millis();
-    
-    WDT.refresh();
-    bool success = true;
-    
-    if (timeInitialized) {
-      sensorData.timestamp = timeClient.getEpochTime();
-    } else {
-      sensorData.timestamp = millis() / 1000;
-      
-      if (millis() - lastNTPUpdateTime >= NTP_UPDATE_INTERVAL) {
-        updateNTPTime();
-      }
-    }
-    
-    // Read DHT sensor with retry mechanism
-    int dhtRetries = 0;
-    const int MAX_DHT_RETRIES = 3;
-    bool dhtSuccess = false;
-    
-    while (!dhtSuccess && dhtRetries < MAX_DHT_RETRIES) {
-      // Wait for 2 seconds between readings (DHT11 needs time to stabilize)
-      if (dhtRetries > 0) {
-        delay(2000);
-      }
-      
-      float newTemp = dht.readTemperature();
-      float newHumidity = dht.readHumidity();
-      
-      if (!isnan(newTemp) && !isnan(newHumidity)) {
-        sensorData.temperature = newTemp;
-        sensorData.humidity = newHumidity;
-        dhtSuccess = true;
-        currentError = ERROR_NONE;  // Clear any previous DHT error
-      } else {
-        dhtRetries++;
-        Serial.print(F("DHT read attempt "));
-        Serial.print(dhtRetries);
-        Serial.println(F(" failed"));
-      }
-    }
-    
-    if (!dhtSuccess) {
-      Serial.println(F("Warning: All DHT sensor read attempts failed"));
-      // Keep previous values if available, otherwise use defaults
-      if (sensorData.temperature == 0.0) sensorData.temperature = 25.0; // Default value
-      if (sensorData.humidity == 0.0) sensorData.humidity = 50.0; // Default value
-      currentError = ERROR_DHT;
-      success = false;
-    }
-    
-    // Read other sensors
-    int newLdrValue = analogRead(LDRPIN);
-    if (newLdrValue < 0 || newLdrValue > 1023) {
-      Serial.println(F("Warning: LDR sensor reading out of range!"));
-      if (sensorData.ldrValue == 0) sensorData.ldrValue = 500; // Medium light
-      currentError = ERROR_LDR;
-      success = false;
-    } else {
-      sensorData.ldrValue = newLdrValue;
-    }
-
-    int newRainValue = analogRead(RAINPIN);
-    if (newRainValue < 0 || newRainValue > 1023) {
-      Serial.println(F("Warning: Rain sensor reading out of range!"));
-      if (sensorData.rainValue == 1023) sensorData.rainValue = 1000;
-      currentError = ERROR_RAIN;
-      success = false;
-    } else {
-      sensorData.rainValue = newRainValue;
-    }
-    
-    int newAirQuality = analogRead(MQ135PIN);
-    if (newAirQuality < 0 || newAirQuality > 1023) {
-      Serial.println(F("Warning: Air quality sensor reading out of range!"));
-      if (sensorData.airQuality == 0) sensorData.airQuality = 300; // Default value
-      currentError = ERROR_AIR;
-      success = false;
-    } else {
-      sensorData.airQuality = newAirQuality;
-    }
-
-    sensorData.airQualityPPM = convertToCO2PPM(sensorData.airQuality);
-    
-    int newSoilMoisture = analogRead(SOILPIN);
-    if (newSoilMoisture < 0 || newSoilMoisture > 1023) {
-      Serial.println(F("Warning: Soil moisture sensor reading out of range!"));
-      if (sensorData.soilMoisture == 1023) sensorData.soilMoisture = 500;
-      currentError = ERROR_SOIL;
-      success = false;
-    } else {
-      sensorData.soilMoisture = newSoilMoisture;
-    }
-    
-    // Always mark as valid since we're using default or previous values when sensors fail
-    sensorData.isValid = true;
-    
-    // Even with errors, mark as completed so system continues
-    sensorTaskState = TASK_COMPLETED;
-    
-    // If everything was successful, clear any error
-    if (success) {
-      currentError = ERROR_NONE;
-    }
-  }
-}
-
-// Non-blocking function to start watering process
-void startWatering() {
-  if (wateringTaskState == TASK_IDLE && sensorData.soilMoisture < SOIL_THRESHOLD) {
-    wateringTaskState = TASK_RUNNING;
-    wateringTaskStartTime = millis();
-    
-    Serial.println(F("Starting watering evaluation..."));
-    
-    // Check rain conditions first
-    if (sensorData.rainValue < HEAVY_RAIN_THRESHOLD) {
-      digitalWrite(PUMP, LOW);
-      Serial.println(F("Heavy rain detected; pump remains off."));
-      wateringTaskState = TASK_COMPLETED;
-    } else {
-      // Will handle the rest in continueWatering()
-    }
-  }
-}
-
-// Continue watering process non-blocking
-void continueWatering() {
-  if (wateringTaskState != TASK_RUNNING) {
-    return;
-  }
-  
-  WDT.refresh();
-  
-  // First-time display setup for watering
-  static bool wateringDisplayInitialized = false;
-  static unsigned long pumpStartTime = 0;
-  static bool pumpActive = false;
-  
-  if (!wateringDisplayInitialized) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    
-    if (sensorData.rainValue < LIGHT_RAIN_THRESHOLD && sensorData.soilMoisture < PARTIAL_SOIL_THRESHOLD) {
-      lcd.print(F("Partial Watering"));
-      pumpActive = true;
-      digitalWrite(PUMP, HIGH);
-    } else if (sensorData.rainValue >= LIGHT_RAIN_THRESHOLD) {
-      lcd.print(F("Watering..."));
-      pumpActive = true;
-      digitalWrite(PUMP, HIGH);
-    } else {
-      lcd.print(F("Light rain"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("No watering needed"));
-      pumpActive = false;
-      digitalWrite(PUMP, LOW);
-      
-      // Short delay to show the message before completing
-      delay(1000);
-      wateringTaskState = TASK_COMPLETED;
-      wateringDisplayInitialized = false;
-      return;
-    }
-    
-    pumpStartTime = millis();
-    wateringDisplayInitialized = true;
-  }
-  
-  // If pump is active, check for completion conditions
-  if (pumpActive) {
-    // Read current soil moisture
-    int currentSoilMoisture = analogRead(SOILPIN);
-    
-    // Update LCD with current soil moisture
-    lcd.setCursor(0, 1);
-    lcd.print(F("Soil: ")); 
-    lcd.print(getSensorStatus(currentSoilMoisture, SOIL_LOW, SOIL_MEDIUM, false));
-    lcd.print(F("      "));
-    
-    // Check if watering is complete or timed out
-    if (currentSoilMoisture >= SOIL_THRESHOLD || (millis() - pumpStartTime >= PUMP_TIME_THRESHOLD)) {
-      digitalWrite(PUMP, LOW);
-      pumpActive = false;
-      
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(F("Watering"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("Complete"));
-      
-      Serial.println(F("Watering completed or timeout reached."));
-      delay(1000); // Show completion message briefly
-      
-      wateringTaskState = TASK_COMPLETED;
-      wateringDisplayInitialized = false;
-    }
-  }
-}
-
-// Non-blocking function to start data upload to database
-void startDataUpload() {
-  if (dbTaskState == TASK_IDLE && millis() - lastServerSendTime >= SERVER_SEND_INTERVAL) {
-    if (!checkWiFi()) {
-      Serial.println(F("Warning: WiFi not connected, skipping data upload"));
-      currentError = ERROR_WIFI;
-      dbTaskState = TASK_FAILED;
-      return;
-    }
-    
-    Serial.println(F("Starting data upload..."));
-    dbTaskState = TASK_RUNNING;
-    dbTaskStartTime = millis();
-    
-    // Prepare JSON data
-    StaticJsonDocument<512> doc;
-    
-    getFormattedTime(timeStampBuffer, sizeof(timeStampBuffer));
-    doc["timestamp"] = timeStampBuffer;
-    doc["temperature"] = sensorData.temperature;
-    doc["humidity"] = sensorData.humidity;
-    doc["ldrValue"] = sensorData.ldrValue;
-    doc["rainValue"] = sensorData.rainValue;
-    doc["airQualityPPM"] = sensorData.airQualityPPM;
-    doc["soilMoisture"] = sensorData.soilMoisture;
-    
-    String jsonData;
-    serializeJson(doc, jsonData);
-    
-    // Debug: Print the JSON data
-    Serial.println(F("Sending JSON data:"));
-    Serial.println(jsonData);
-    
-    // Set up HTTP request
-    Serial.println(F("Setting up HTTP request..."));
-    http.beginRequest();
-    http.post("/pertanian/api/insert_data.php");
-    http.sendHeader("Content-Type", "application/json");
-    http.sendHeader("Content-Length", jsonData.length());
-    http.write((const uint8_t*)jsonData.c_str(), jsonData.length());
-    http.endRequest();
-    
-    // Check response
-    int statusCode = http.responseStatusCode();
-    String response = http.responseBody();
-    
-    Serial.print(F("HTTP Status Code: "));
-    Serial.println(statusCode);
-    Serial.print(F("Response: "));
-    Serial.println(response);
-    
-    if (statusCode == 200) {
-      Serial.println(F("Data sent successfully"));
-      dataTransmissionErrors = 0;
-      lastServerSendTime = millis();
-      dbTaskState = TASK_COMPLETED;
-    } else {
-      Serial.print(F("HTTP request failed: "));
-      Serial.println(statusCode);
-      dbTaskState = TASK_FAILED;
-      currentError = ERROR_SERVER;
-    }
-  }
-}
-
-// Continue database upload non-blocking
-void continueDataUpload() {
-  if (dbTaskState != TASK_RUNNING) {
-    return;
-  }
-  
-  WDT.refresh();
-  
-  // Check for timeout
-  if (millis() - dbTaskStartTime >= HTTP_TIMEOUT) {
-    Serial.println(F("HTTP request timed out"));
-    dbTaskState = TASK_FAILED;
-    currentError = ERROR_SERVER;
-  }
-}
-
-// Non-blocking function to update display
-void updateDisplay() {
-  if (displayTaskState == TASK_IDLE && millis() - lastLCDUpdateTime >= LCD_UPDATE_INTERVAL) {
-    displayTaskState = TASK_RUNNING;
-    
-    // Log sensor data to serial
-    getFormattedTime(timeStampBuffer, sizeof(timeStampBuffer));
-    Serial.print(F("Timestamp: "));
-    Serial.println(timeStampBuffer);
-    
-    snprintf(msgBuffer, sizeof(msgBuffer), "Temperature  : %.1f°C", sensorData.temperature);
-    Serial.println(msgBuffer);
-    
-    snprintf(msgBuffer, sizeof(msgBuffer), "Humidity     : %.1f%%", sensorData.humidity);
-    Serial.println(msgBuffer);
-    
-    snprintf(msgBuffer, sizeof(msgBuffer), "Light Level  : %d (%s)", 
-            sensorData.ldrValue, getSensorStatus(sensorData.ldrValue, LIGHT_LOW, LIGHT_MEDIUM, true));
-    Serial.println(msgBuffer);
-    
-    snprintf(msgBuffer, sizeof(msgBuffer), "Rain Level   : %d (%s)", 
-            sensorData.rainValue, getSensorStatus(sensorData.rainValue, RAIN_LOW, RAIN_MEDIUM, true));
-    Serial.println(msgBuffer);
-    
-    snprintf(msgBuffer, sizeof(msgBuffer), "Air Quality  : %0.1f PPM", 
-          sensorData.airQualityPPM);
-    Serial.println(msgBuffer);
-    
-    snprintf(msgBuffer, sizeof(msgBuffer), "Soil Moisture: %d (%s)\n", 
-            sensorData.soilMoisture, getSensorStatus(sensorData.soilMoisture, SOIL_LOW, SOIL_MEDIUM, false));
-    Serial.println(msgBuffer);
-
-    unsigned long currentTime = millis();
-    
-    // Check if it's time to change display mode
-    if (currentTime - lastLCDModeChangeTime >= LCD_MODE_CHANGE_INTERVAL) {
-      displayMode = (displayMode + 1) % 4;
-      lastLCDModeChangeTime = currentTime;
-      readingCount = 0;
-
-      lcd.clear();
-    }
-    
-    // Update display based on current mode
-    switch (displayMode) {
-      case 0:
-        lcd.setCursor(0, 0);
-        lcd.print(F("Temp: ")); 
-        lcd.print(sensorData.temperature, 1); 
-        lcd.print((char)223); 
-        lcd.print(F("C    "));
-        
-        lcd.setCursor(0, 1);
-        
-        if (dbTaskState == TASK_RUNNING) {
-          lcd.print(F("Sending data... "));
-        } else {
-          lcd.print(F("Humidity: ")); 
-          lcd.print(sensorData.humidity, 1); 
-          lcd.print(F("%    "));
-        }
-        break;
-        
-      case 1:
-        lcd.setCursor(0, 0);
-        lcd.print(F("Soil: ")); 
-        lcd.print(getSensorStatus(sensorData.soilMoisture, SOIL_LOW, SOIL_MEDIUM, false));
-        lcd.print(F("    "));
-        
-        lcd.setCursor(0, 1);
-        
-        if (dbTaskState == TASK_RUNNING) {
-          lcd.print(F("Sending data... "));
-        } else {
-          lcd.print(F("Rain: ")); 
-          lcd.print(getSensorStatus(sensorData.rainValue, RAIN_LOW, RAIN_MEDIUM, true));
-          lcd.print(F("    "));
-        }
-        break;
-        
-      case 2:
-        lcd.setCursor(0, 0);
-        lcd.print(F("Light: ")); 
-        lcd.print(getSensorStatus(sensorData.ldrValue, LIGHT_LOW, LIGHT_MEDIUM, true));
-        lcd.print(F("    "));
-        
-        lcd.setCursor(0, 1);
-        
-        if (dbTaskState == TASK_RUNNING) {
-          lcd.print(F("Sending data... "));
-        } else {
-          lcd.print(F("CO2: ")); 
-          lcd.print((int)sensorData.airQualityPPM);
-          lcd.print(F(" PPM   "));
-        }
-        break;
-        
-      case 3:
-        if (timeInitialized) {
-          lcd.setCursor(0, 0);
-          lcd.print(F("Time: ")); 
-          lcd.print(timeClient.getFormattedTime());
-          lcd.print(F("    "));
-          
-          lcd.setCursor(0, 1);
-          
-          if (dbTaskState == TASK_RUNNING) {
-            lcd.print(F("Sending data... "));
-          } else {
-            time_t rawtime = timeClient.getEpochTime();
-            struct tm* ti = localtime(&rawtime);
-            
-            lcd.print(F("Date: ")); 
-            if (ti->tm_mon < 9) lcd.print('0');
-            lcd.print(ti->tm_mon + 1);
-            lcd.print('/'); 
-            if (ti->tm_mday < 10) lcd.print('0');
-            lcd.print(ti->tm_mday);
-            lcd.print('/');
-            lcd.print((ti->tm_year + 1900) % 100);
-            lcd.print(F("    "));
-          }
-        } else {
-          lcd.setCursor(0, 0);
-          lcd.print(F("Time not sync'd"));
-          lcd.setCursor(0, 1);
-          lcd.print(F("Check WiFi/NTP"));
-        }
-        break;
-    }
-    
-    lastLCDUpdateTime = currentTime;
-    displayTaskState = TASK_COMPLETED;
   }
 }
 
@@ -752,95 +273,43 @@ void displayErrorOnce(ErrorCode error) {
   }
 }
 
-void handleError() {
-  WDT.refresh();
+// Function to control watering based on conditions
+void controlWatering() {
+  // Get current sensor readings
+  int soilValue = sensorData.soilMoisture;
+  int rainValue = sensorData.rainValue;
   
-  unsigned long currentTime = millis();
-  
-  if (currentError != lastDisplayedError) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(F("SYSTEM WARNING")); // Changed from ERROR to WARNING
-    lcd.setCursor(0, 1);
-    
-    switch (currentError) {
-      case ERROR_DHT:
-        lcd.print(F("Temp/Humid Sensor"));
-        break;
-      case ERROR_SOIL:
-        lcd.print(F("Soil Sensor"));
-        break;
-      case ERROR_RAIN:
-        lcd.print(F("Rain Sensor"));
-        break;
-      case ERROR_AIR:
-        lcd.print(F("Air Quality"));
-        break;
-      case ERROR_LDR:
-        lcd.print(F("Light Sensor"));
-        break;
-      case ERROR_PUMP:
-        lcd.print(F("Pump Malfunction"));
-        break;
-      case ERROR_WIFI:
-        lcd.print(F("WiFi Connection"));
-        break;
-      case ERROR_SERVER:
-        lcd.print(F("Server Connection"));
-        break;
-      case ERROR_TIME:
-        lcd.print(F("Time Sync Failed"));
-        break;
-      case ERROR_DB:
-        lcd.print(F("Database Error"));
-        break;
-      default:
-        lcd.print(F("Unknown Error"));
-        break;
+  // Check if pump is already running
+  if (isPumpActive) {
+    // Check if soil is now wet enough or max duration reached
+    if (soilValue > SOIL_THRESHOLD || (millis() - pumpStartTime) > MAX_PUMP_DURATION) {
+      digitalWrite(PUMP, LOW);
+      isPumpActive = false;
+      Serial.println(F("Pump stopped - Soil wet or max duration reached"));
     }
-    
-    lastDisplayedError = currentError;
-    errorStartTime = currentTime;
+    return;
   }
   
-  if (currentTime - errorStartTime > ERROR_DISPLAY_TIMEOUT) {
-    // Instead of just displaying error, continue with the system operation
-    // Try to recover from errors when possible
-    switch (currentError) {
-      case ERROR_WIFI:
-        if (checkWiFi()) {
-          currentError = ERROR_NONE;
-        }
-        break;
-      case ERROR_DB:
-        if (millis() - lastDBRetryTime >= DB_RETRY_INTERVAL) {
-          startDatabaseConnection();
-          lastDBRetryTime = millis();
-          if (dbTaskState == TASK_COMPLETED) {
-            currentError = ERROR_NONE;
-          }
-        }
-        break;
-      case ERROR_DHT:
-      case ERROR_SOIL:
-      case ERROR_RAIN:
-      case ERROR_AIR:
-      case ERROR_LDR:
-        // For sensor errors, we'll let the system continue and try again on next cycle
-        break;
-      default:
-        // For other errors, clear them after display timeout
-        break;
+  // Check if soil is dry
+  if (soilValue < SOIL_THRESHOLD) {
+    // Check rain conditions (inverse logic - lower value means more rain)
+    if (rainValue < RAIN_MEDIUM) {
+      // Heavy rain - don't water
+      Serial.println(F("No watering needed - Heavy rain detected"));
+    } else if (rainValue < RAIN_LOW) {
+      // Medium rain - partial watering
+      digitalWrite(PUMP, HIGH);
+      isPumpActive = true;
+      pumpStartTime = millis();
+      Serial.println(F("Partial watering started - Medium rain"));
+    } else {
+      // No rain - full watering
+      digitalWrite(PUMP, HIGH);
+      isPumpActive = true;
+      pumpStartTime = millis();
+      Serial.println(F("Full watering started - No rain"));
     }
-    
-    // Always move to next state regardless of error resolution
-    currentState = STATE_READ_SENSORS;
   }
-}
-
-// Function to ensure database and table exist - no longer needed as it's handled by PHP
-bool setupDatabase() {
-  return true;  // Always return true as database setup is handled by PHP
 }
 
 void setup() {
@@ -905,7 +374,6 @@ void setup() {
       lcd.setCursor(0, 1);
       lcd.print(F("Time Sync Failed"));
       currentError = ERROR_TIME;
-      // Continue anyway despite time sync failure
     }
     delay(2000);
   } else {
@@ -919,32 +387,9 @@ void setup() {
     delay(2000);
   }
   
-  // Initial sensor read
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print(F("Reading Sensors"));
-  
-  startSensorReading();
-  while (sensorTaskState == TASK_RUNNING) {
-    WDT.refresh();
-    delay(100);
-    lcd.setCursor(0, 1);
-    lcd.print("Please wait...  ");
-  }
-  
-  if (sensorTaskState == TASK_COMPLETED && currentError == ERROR_NONE) {
-    lcd.setCursor(0, 1);
-    lcd.print("Sensors OK      ");
-  } else {
-    lcd.setCursor(0, 1);
-    lcd.print("Sensor Warning  ");
-    // Continue despite sensor issues
-  }
-  delay(2000);
-  
   // Set initial state
   currentState = STATE_READ_SENSORS;
-  stateStartTime = millis();
+  lastStateChangeTime = millis();
   
   Serial.println(F("System initialization complete"));
   lcd.clear();
@@ -959,106 +404,266 @@ void loop() {
   // Refresh watchdog timer to prevent reset
   WDT.refresh();
   
-  // Check if there's an active error
-  if (currentError != ERROR_NONE) {
-    handleError();
-  }
-
-  // Always check if it's time to read sensors, regardless of current state
-  if (millis() - lastSensorReadTime >= SENSOR_READ_INTERVAL) {
-    startSensorReading();
-  }
-
-  // Always check if it's time to send data, regardless of current state
-  if (millis() - lastServerSendTime >= SERVER_SEND_INTERVAL) {
-    startDataUpload();
-  }
-
-  // Always update display, regardless of current state
-  if (millis() - lastLCDUpdateTime >= LCD_UPDATE_INTERVAL) {
-    updateDisplay();
+  // Check if it's time to change state
+  if (millis() - lastStateChangeTime >= STATE_DURATION) {
+    // Move to next state
+    switch (currentState) {
+      case STATE_READ_SENSORS:
+        currentState = STATE_DISPLAY_DATA;
+        break;
+      case STATE_DISPLAY_DATA:
+        currentState = STATE_SEND_DATA;
+        // Increment display mode when moving to next state
+        displayMode = (displayMode + 1) % NUM_DISPLAY_MODES;
+        break;
+      case STATE_SEND_DATA:
+        currentState = STATE_WATERING;
+        break;
+      case STATE_WATERING:
+        currentState = STATE_READ_SENSORS;
+        break;
+    }
+    lastStateChangeTime = millis();
   }
   
-  // Main state machine
+  // Declare variables outside switch statement
+  float newTemp;
+  float newHumidity;
+  
+  // Execute current state
   switch (currentState) {
-    case STATE_INIT:
-      currentState = STATE_READ_SENSORS;
-      break;
-      
     case STATE_READ_SENSORS:
-      if (sensorTaskState == TASK_COMPLETED) {
-        sensorTaskState = TASK_IDLE;
-        
-        // Evaluate if watering is needed
-        if (sensorData.soilMoisture < SOIL_THRESHOLD) {
-          currentState = STATE_EVALUATE_WATERING;
-        } else {
-          currentState = STATE_DISPLAY_DATA;
-        }
-      } else if (sensorTaskState == TASK_FAILED) {
-        sensorTaskState = TASK_IDLE;
-        displayErrorOnce(currentError);
-        currentState = STATE_DISPLAY_DATA;
+      // Read all sensors
+      if (timeInitialized) {
+        sensorData.timestamp = timeClient.getEpochTime();
+      } else {
+        sensorData.timestamp = millis() / 1000;
       }
-      break;
       
-    case STATE_EVALUATE_WATERING:
-      startWatering();
-      
-      if (wateringTaskState == TASK_RUNNING) {
-        continueWatering();
-      } else if (wateringTaskState == TASK_COMPLETED) {
-        wateringTaskState = TASK_IDLE;
-        currentState = STATE_DISPLAY_DATA;
-      } else if (wateringTaskState == TASK_FAILED) {
-        wateringTaskState = TASK_IDLE;
-        currentError = ERROR_PUMP;
+      // Read DHT sensor
+      newTemp = dht.readTemperature();
+      newHumidity = dht.readHumidity();
+      if (!isnan(newTemp) && !isnan(newHumidity)) {
+        sensorData.temperature = newTemp;
+        sensorData.humidity = newHumidity;
+        currentError = ERROR_NONE;
+      } else {
+        currentError = ERROR_DHT;
       }
-      break;
       
-    case STATE_WATERING:
-      continueWatering();
+      // Read other sensors
+      sensorData.ldrValue = analogRead(LDRPIN);
+      sensorData.rainValue = analogRead(RAINPIN);
+      sensorData.airQuality = analogRead(MQ135PIN);
+      sensorData.soilMoisture = analogRead(SOILPIN);
       
-      if (wateringTaskState == TASK_COMPLETED) {
-        wateringTaskState = TASK_IDLE;
-        currentState = STATE_DISPLAY_DATA;
-      } else if (wateringTaskState == TASK_FAILED) {
-        wateringTaskState = TASK_IDLE;
-        currentError = ERROR_PUMP;
-      }
+      // Log sensor data to serial
+      getFormattedTime(timeStampBuffer, sizeof(timeStampBuffer));
+      Serial.print(F("Timestamp: "));
+      Serial.println(timeStampBuffer);
+      
+      snprintf(msgBuffer, sizeof(msgBuffer), "Temperature  : %.1f°C", sensorData.temperature);
+      Serial.println(msgBuffer);
+      
+      snprintf(msgBuffer, sizeof(msgBuffer), "Humidity     : %.1f%%", sensorData.humidity);
+      Serial.println(msgBuffer);
+      
+      snprintf(msgBuffer, sizeof(msgBuffer), "Light Level  : %d (%s)", 
+              sensorData.ldrValue, getSensorStatus(sensorData.ldrValue, LIGHT_LOW, LIGHT_MEDIUM, true));
+      Serial.println(msgBuffer);
+      
+      snprintf(msgBuffer, sizeof(msgBuffer), "Rain Level   : %d (%s)", 
+              sensorData.rainValue, getSensorStatus(sensorData.rainValue, RAIN_LOW, RAIN_MEDIUM, true));
+      Serial.println(msgBuffer);
+      
+      snprintf(msgBuffer, sizeof(msgBuffer), "Air Quality  : %d (%s)", 
+              sensorData.airQuality, getAirQualityLevel(sensorData.airQuality));
+      Serial.println(msgBuffer);
+      
+      snprintf(msgBuffer, sizeof(msgBuffer), "Soil Moisture: %d (%s)\n", 
+              sensorData.soilMoisture, getSensorStatus(sensorData.soilMoisture, SOIL_LOW, SOIL_MEDIUM, false));
+      Serial.println(msgBuffer);
       break;
       
     case STATE_DISPLAY_DATA:
-      // Periodically go back to read sensors
-      if (millis() - lastSensorReadTime >= SENSOR_READ_INTERVAL) {
-        currentState = STATE_READ_SENSORS;
+      // Update LCD display based on current mode
+      lcd.clear();
+      switch (displayMode) {
+        case 0:  // Temperature and Humidity
+          lcd.setCursor(0, 0);
+          lcd.print(F("Temp: ")); 
+          lcd.print(sensorData.temperature, 1); 
+          lcd.print((char)223); 
+          lcd.print(F("C    "));
+          
+          lcd.setCursor(0, 1);
+          lcd.print(F("Humidity: ")); 
+          lcd.print(sensorData.humidity, 1); 
+          lcd.print(F("%    "));
+          break;
+          
+        case 1:  // Soil Moisture
+          lcd.setCursor(0, 0);
+          lcd.print(F("Soil Moisture:"));
+          lcd.setCursor(0, 1);
+          lcd.print(getSensorStatus(sensorData.soilMoisture, SOIL_LOW, SOIL_MEDIUM, false));
+          lcd.print(F(" ("));
+          lcd.print(sensorData.soilMoisture);
+          lcd.print(F(")"));
+          break;
+          
+        case 2:  // Rain Level
+          lcd.setCursor(0, 0);
+          lcd.print(F("Rain Level:"));
+          lcd.setCursor(0, 1);
+          lcd.print(getSensorStatus(sensorData.rainValue, RAIN_LOW, RAIN_MEDIUM, true));
+          lcd.print(F(" ("));
+          lcd.print(sensorData.rainValue);
+          lcd.print(F(")"));
+          break;
+          
+        case 3:  // Light Level
+          lcd.setCursor(0, 0);
+          lcd.print(F("Light Level:"));
+          lcd.setCursor(0, 1);
+          lcd.print(getSensorStatus(sensorData.ldrValue, LIGHT_LOW, LIGHT_MEDIUM, true));
+          lcd.print(F(" ("));
+          lcd.print(sensorData.ldrValue);
+          lcd.print(F(")"));
+          break;
+          
+        case 4:  // Air Quality
+          lcd.setCursor(0, 0);
+          lcd.print(F("Air Quality:"));
+          lcd.setCursor(0, 1);
+          lcd.print(getAirQualityLevel(sensorData.airQuality));
+          lcd.print(F(" ("));
+          lcd.print(sensorData.airQuality);
+          lcd.print(F(")"));
+          break;
+          
+        case 5:  // Time and Date
+          if (timeInitialized) {
+            lcd.setCursor(0, 0);
+            lcd.print(F("Time: "));
+            lcd.print(timeClient.getFormattedTime());
+            
+            lcd.setCursor(0, 1);
+            time_t rawtime = timeClient.getEpochTime();
+            struct tm* ti = localtime(&rawtime);
+            lcd.print(F("Date: "));
+            if (ti->tm_mon < 9) lcd.print('0');
+            lcd.print(ti->tm_mon + 1);
+            lcd.print('/');
+            if (ti->tm_mday < 10) lcd.print('0');
+            lcd.print(ti->tm_mday);
+            lcd.print('/');
+            lcd.print((ti->tm_year + 1900) % 100);
+          } else {
+            lcd.setCursor(0, 0);
+            lcd.print(F("Time not sync'd"));
+            lcd.setCursor(0, 1);
+            lcd.print(F("Check WiFi/NTP"));
+          }
+          break;
       }
       break;
       
     case STATE_SEND_DATA:
-      if (dbTaskState == TASK_RUNNING) {
-        continueDataUpload();
-      } else if (dbTaskState == TASK_COMPLETED) {
-        dbTaskState = TASK_IDLE;
-        currentState = STATE_DISPLAY_DATA;
-      } else if (dbTaskState == TASK_FAILED) {
-        dbTaskState = TASK_IDLE;
-        dataTransmissionErrors++;
+      if (WiFi.status() == WL_CONNECTED) {
+        // Prepare JSON data
+        StaticJsonDocument<512> doc;
         
-        if (dataTransmissionErrors >= 3) {
-          if (millis() - lastDBRetryTime >= DB_RETRY_INTERVAL) {
-            startDatabaseConnection();
-            lastDBRetryTime = millis();
+        getFormattedTime(timeStampBuffer, sizeof(timeStampBuffer));
+        doc["timestamp"] = timeStampBuffer;
+        doc["temperature"] = sensorData.temperature;
+        doc["humidity"] = sensorData.humidity;
+        doc["ldrValue"] = sensorData.ldrValue;
+        doc["rainValue"] = sensorData.rainValue;
+        doc["airQualityPPM"] = sensorData.airQuality;
+        doc["soilMoisture"] = sensorData.soilMoisture;
+        
+        String jsonData;
+        serializeJson(doc, jsonData);
+        
+        // Debug: Print the JSON data
+        Serial.println(F("Sending JSON data:"));
+        Serial.println(jsonData);
+        
+        // Set up HTTP request with timeout
+        http.setTimeout(5000);  // 5 second timeout
+        
+        // Set up HTTP request
+        http.beginRequest();
+        http.post("/pertanian/api/insert_data.php");
+        http.sendHeader("Content-Type", "application/json");
+        http.sendHeader("Content-Length", jsonData.length());
+        http.write((const uint8_t*)jsonData.c_str(), jsonData.length());
+        http.endRequest();
+        
+        // Check response with detailed error handling
+        int statusCode = http.responseStatusCode();
+        String response = http.responseBody();
+        
+        Serial.print(F("HTTP Status Code: "));
+        Serial.println(statusCode);
+        Serial.print(F("Response: "));
+        Serial.println(response);
+        
+        if (statusCode == 200) {
+          Serial.println(F("Data sent successfully"));
+          currentError = ERROR_NONE;
+        } else if (statusCode == 500) {
+          Serial.println(F("Server Error (500) - Check server logs"));
+          Serial.println(F("Response body:"));
+          Serial.println(response);
+          currentError = ERROR_SERVER;
+          
+          // Try to parse error response if it's JSON
+          StaticJsonDocument<200> errorDoc;
+          DeserializationError error = deserializeJson(errorDoc, response);
+          if (!error) {
+            if (errorDoc.containsKey("message")) {
+              Serial.print(F("Error message: "));
+              Serial.println(errorDoc["message"].as<const char*>());
+            }
           }
+        } else {
+          Serial.print(F("HTTP request failed with status: "));
+          Serial.println(statusCode);
+          Serial.println(F("Response body:"));
+          Serial.println(response);
+          currentError = ERROR_SERVER;
         }
-        
-        currentState = STATE_DISPLAY_DATA;
+      } else {
+        Serial.println(F("WiFi not connected - skipping data upload"));
+        currentError = ERROR_WIFI;
       }
       break;
       
-    case STATE_ERROR:
-      handleError();
+    case STATE_WATERING:
+      // Control watering based on conditions
+      controlWatering();
+      
+      // Display watering status on LCD
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(F("Watering Status:"));
+      lcd.setCursor(0, 1);
+      if (isPumpActive) {
+        lcd.print(F("PUMP ON"));
+        if (sensorData.rainValue > RAIN_LOW && sensorData.rainValue <= RAIN_MEDIUM) {
+          lcd.print(F(" (Partial)"));
+        }
+      } else {
+        lcd.print(F("PUMP OFF"));
+      }
       break;
+  }
+  
+  // Handle any errors
+  if (currentError != ERROR_NONE) {
+    displayErrorOnce(currentError);
   }
   
   // Small delay to prevent hogging CPU
