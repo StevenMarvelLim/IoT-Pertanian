@@ -32,7 +32,25 @@ pertanian/
 
 ---
 
-## 2. Backend (Node.js/Express)
+## 2. Database Setup
+- 1. Create a new database named iot_pertanian.
+- 2. Create the sensor data table by running the following SQL command:
+    ```sh
+    CREATE TABLE sensor_data (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      timestamp DATETIME NOT NULL,
+      temperature FLOAT,
+      humidity FLOAT,
+      ldrValue FLOAT,
+      rainValue FLOAT,
+      airQualityPPM FLOAT,
+      soilMoisture FLOAT
+    );
+    ```
+  
+---
+
+## 3. Backend (Node.js/Express)
 
 - **Location:** `backend/`
 - **Description:**
@@ -52,7 +70,7 @@ pertanian/
 
 ---
 
-## 3. Frontend (React Dashboard)
+## 4. Frontend (React Dashboard)
 
 - **Location:** `frontend/dashboard/`
 - **Description:**
