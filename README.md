@@ -33,7 +33,7 @@ pertanian/
 ---
 
 ## 2. Database Setup
-- Create a new database named iot_pertanian.
+- Create a new database named 'iot_pertanian'
 - Create the sensor data table by running the following SQL command:
     ```sh
     CREATE TABLE sensor_data (
