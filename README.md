@@ -4,7 +4,7 @@
 pertanian/
 ├── backend/              # Node.js Express backend API
 ├── frontend/dashboard/   # React frontend dashboard
-├── IoT_Pertanian/        # Arduino IoT firmware
+├── arduino/        # Arduino IoT firmware
 ```
 
 ---
@@ -50,7 +50,7 @@ npm start
 - The React dashboard will start (default: http://localhost:3000 or http://localhost:3001)
 
 ### 4. IoT Firmware
-- Open `IoT_Pertanian/IoT_Pertanian.ino` in the Arduino IDE
+- Open `arduino/IoT_Pertanian.ino` in the Arduino IDE
 - Upload to your Arduino-compatible device
 - Configure network and sensor settings as needed
 
