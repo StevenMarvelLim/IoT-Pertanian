@@ -5,7 +5,6 @@
 }
 
 body {
-  margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
@@ -27,27 +26,7 @@ code {
 .App-logo {
   height: 40vmin;
   pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
-}
-
-.App-link {
-  color: #61dafb;
+  animation: App-logo-spin infinite 20s linear;
 }
 
 @keyframes App-logo-spin {
@@ -59,7 +38,6 @@ code {
   }
 }
 
-/* Dashboard Styles */
 .dashboard-container {
   min-height: 100vh;
   background: #eef2f6;
@@ -88,12 +66,12 @@ code {
 }
 
 .dashboard-date {
-  color: #666666;
+  color: #666;
 }
 
-.main-card {
+.main-card, .historical-card, .table-card {
   padding: 16px;
-  background: #ffffff;
+  background: #fff;
   border-radius: 32px;
   border: 1px solid #e0e0e0;
   box-shadow: 0 2px 4px rgba(0,0,0,0.05);
@@ -105,7 +83,7 @@ code {
   align-items: center;
   gap: 8px;
   font-weight: bold;
-  color: #333333;
+  color: #333;
   margin-bottom: 16px;
   padding-bottom: 8px;
   border-bottom: 1px solid #e0e0e0;
@@ -131,7 +109,6 @@ code {
   width: 100%;
   min-width: 200px;
   max-width: 250px;
-  border-left: 4px solid;
   transition: transform 0.2s;
   border-radius: 16px;
 }
@@ -154,7 +131,7 @@ code {
   font-weight: 500;
   flex-grow: 1;
   font-size: 0.75rem;
-  color: #333333;
+  color: #333;
 }
 
 .sensor-value-container {
@@ -172,23 +149,12 @@ code {
 }
 
 .sensor-status {
-  color: #666666;
+  color: #666;
   text-align: center;
   margin-top: 4px;
   text-transform: uppercase;
   font-size: 0.65rem;
   font-weight: 500;
-}
-
-.historical-card {
-  padding: 16px;
-  background: #ffffff;
-  border-radius: 32px;
-  border: 1px solid #e0e0e0;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-  height: 100%;
-  display: flex;
-  flex-direction: column;
 }
 
 .historical-header {
@@ -198,4 +164,29 @@ code {
   margin-bottom: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid #e0e0e0;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+
+.table-header .search-field {
+  margin-right: 1px;
+  margin-top: 1px;
+}
+
+.historical-content > .MuiGrid-container:first-child {
+  margin-bottom: 16px;
+}
+
+.graph-container {
+  min-height: 193px;
+}
+
+.graph-content {
+  min-height: 120px;
 } 

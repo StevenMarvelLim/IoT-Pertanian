@@ -288,6 +288,75 @@ app.get('/api/sensors/table', (req, res) => {
   });
 });
 
+app.get('/api/sensors/average', (req, res) => {
+  const { hours, date } = req.query;
+  let query = '';
+  let params = [];
+
+  if (date) {
+    // Average for a specific date (YYYY-MM-DD)
+    query = `SELECT 
+      AVG(temperature) AS temperature,
+      AVG(humidity) AS humidity,
+      AVG(ldrValue) AS ldrValue,
+      AVG(rainValue) AS rainValue,
+      AVG(airQualityPPM) AS airQualityPPM,
+      AVG(soilMoisture) AS soilMoisture
+    FROM sensor_data
+    WHERE DATE(timestamp) = ?`;
+    params = [date];
+  } else if (hours) {
+    // Average for the last N hours
+    query = `SELECT 
+      AVG(temperature) AS temperature,
+      AVG(humidity) AS humidity,
+      AVG(ldrValue) AS ldrValue,
+      AVG(rainValue) AS rainValue,
+      AVG(airQualityPPM) AS airQualityPPM,
+      AVG(soilMoisture) AS soilMoisture
+    FROM sensor_data
+    WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+      AND timestamp <= NOW()`;
+    params = [hours];
+  } else {
+    // Average for all data
+    query = `SELECT 
+      AVG(temperature) AS temperature,
+      AVG(humidity) AS humidity,
+      AVG(ldrValue) AS ldrValue,
+      AVG(rainValue) AS rainValue,
+      AVG(airQualityPPM) AS airQualityPPM,
+      AVG(soilMoisture) AS soilMoisture
+    FROM sensor_data`;
+  }
+
+  db.query(query, params, (err, results) => {
+    if (err) {
+      console.error('Error fetching average sensor values:', err);
+      return res.status(500).json({ error: 'Error fetching average sensor values' });
+    }
+    if (!results || results.length === 0) {
+      return res.json({
+        temperature: 0,
+        humidity: 0,
+        ldrValue: 0,
+        rainValue: 0,
+        airQualityPPM: 0,
+        soilMoisture: 0
+      });
+    }
+    const data = results[0];
+    res.json({
+      temperature: Number(data.temperature) || 0,
+      humidity: Number(data.humidity) || 0,
+      ldrValue: Number(data.ldrValue) || 0,
+      rainValue: Number(data.rainValue) || 0,
+      airQualityPPM: Number(data.airQualityPPM) || 0,
+      soilMoisture: Number(data.soilMoisture) || 0
+    });
+  });
+});
+
 // Helper function to determine status
 function getStatus(value, lowThreshold, highThreshold, isInverted = false) {
   if (isInverted) {

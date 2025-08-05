@@ -62,6 +62,23 @@ function App() {
   const [timeRange, setTimeRange] = useState(24);
   const [tableData, setTableData] = useState([]);
   const [searchDate, setSearchDate] = useState('');
+  const [averageSensorData, setAverageSensorData] = useState({
+    temperature: 0,
+    humidity: 0,
+    ldrValue: 0,
+    rainValue: 0,
+    airQualityPPM: 0,
+    soilMoisture: 0
+  });
+
+  const sensorKeys = [
+    'temperature',
+    'humidity',
+    'ldrValue',
+    'rainValue',
+    'airQualityPPM',
+    'soilMoisture'
+  ];
 
   useEffect(() => {
     const fetchData = async () => {
@@ -98,6 +115,33 @@ function App() {
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [timeRange]);
+
+  // Fetch average sensor data when timeRange or searchDate changes
+  useEffect(() => {
+    const fetchAverage = async () => {
+      try {
+        let url = 'http://localhost:3001/api/sensors/average';
+        if (searchDate) {
+          url += `?date=${searchDate}`;
+        } else if (timeRange) {
+          url += `?hours=${timeRange}`;
+        }
+        const res = await fetch(url);
+        const data = await res.json();
+        setAverageSensorData(data);
+      } catch (err) {
+        setAverageSensorData({
+          temperature: 0,
+          humidity: 0,
+          ldrValue: 0,
+          rainValue: 0,
+          airQualityPPM: 0,
+          soilMoisture: 0
+        });
+      }
+    };
+    fetchAverage();
+  }, [timeRange, searchDate]);
 
   const getStatusColor = (status, sensorKey) => {
     if (sensorKey === 'airQualityPPM') {
@@ -178,29 +222,43 @@ function App() {
     }
   };
 
+  // Helper to get status for average values (replicates backend logic)
+  const getStatus = (value, lowThreshold, highThreshold, isInverted = false) => {
+    if (isInverted) {
+      if (value > highThreshold) return 'low';
+      if (value < lowThreshold) return 'high';
+      return 'medium';
+    } else {
+      if (value < lowThreshold) return 'low';
+      if (value > highThreshold) return 'high';
+      return 'medium';
+    }
+  };
+
   const SensorCard = ({ sensorKey, title, value, status }) => (
     <Paper
       elevation={3}
       className={`sensor-card ${sensorKey} status-${status}`}
+      sx={{ height: '90px' }}
     >
       <Box className="sensor-card-header">
-        <Typography variant="h6" component="h3" className="sensor-icon">
+        <Typography variant="body2" component="h3" className="sensor-icon">
           {getSensorIcon(sensorKey)}
         </Typography>
-        <Typography variant="subtitle2" component="div" className="sensor-title">
+        <Typography variant="caption" component="div" className="sensor-title">
           {title}
         </Typography>
         <Tooltip title={`Status: ${status.toUpperCase()}`}>
           <IconButton size="small">
-            <InfoIcon style={{ color: getStatusColor(status, sensorKey), fontSize: '0.875rem' }} />
+            <InfoIcon style={{ color: getStatusColor(status, sensorKey), fontSize: '0.75rem' }} />
           </IconButton>
         </Tooltip>
       </Box>
       <Box className="sensor-value-container">
-        <Typography variant="h5" component="div" className="sensor-value" style={{ color: getStatusColor(status, sensorKey) }}>
+        <Typography variant="h6" component="div" className="sensor-value" style={{ color: getStatusColor(status, sensorKey) }}>
           {value}
         </Typography>
-        <Typography variant="caption" className="sensor-status">
+        <Typography variant="caption" className="sensor-status" sx={{ fontSize: '0.6rem' }}>
           {status}
         </Typography>
       </Box>
@@ -208,25 +266,9 @@ function App() {
   );
 
   const TimeRangeSelector = () => {
-    const endDate = new Date();
-    const startDate = new Date(endDate - (timeRange * 60 * 60 * 1000));
-    
-    const formatDate = (date) => {
-      return date.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      });
-    };
-
     return (
       <Box className="time-range-container">
-        <Typography variant="caption" className="time-range-text">
-          {formatDate(startDate)} - {formatDate(endDate)}
-        </Typography>
-        <FormControl size="small" className="time-range-select">
+        <FormControl size="small" sx={{ minWidth: 140 }}>
           <InputLabel>Time Range</InputLabel>
           <Select
             value={timeRange}
@@ -320,11 +362,11 @@ function App() {
     }
   
     return (
-      <Paper elevation={3} className="graph-container">
-        <Typography variant="subtitle2" className="graph-title">
+      <Paper elevation={3} className="graph-container" sx={{ height: '100%' }}>
+        <Typography variant="caption" className="graph-title" sx={{ fontSize: '0.7rem', p: 0.5 }}>
           {getSensorIcon(sensorKey)} {title}
         </Typography>
-        <Box className="graph-content">
+        <Box className="graph-content" sx={{ height: 'calc(100% - 25px)' }}>
           <Line
             data={{
               labels: (historicalData.labels || []).slice(-10),
@@ -404,174 +446,165 @@ function App() {
           </Typography>
         </Box>
 
-        <Grid container spacing={2} sx={{ alignItems: 'flex-start' }} justifyContent="space-between">
-          {/* Left Column: Latest Data Cards in Big Box */}
-          <Grid item xs={6}>
-            <Paper elevation={4} className="main-card">
-              <Typography variant="h5" gutterBottom className="card-title">
-                📊 Latest Sensor Data
-              </Typography>
-              
-              <Box className="sensor-cards-container">
-                <Box className="sensor-cards-row">
-                  <Box sx={{ flex: 1 }}>
-                    <SensorCard
-                      sensorKey="temperature"
-                      title={getSensorName('temperature')}
-                      value={sensorData.temperature.value}
-                      status={sensorData.temperature.status}
-                    />
+        <Grid container spacing={1} sx={{ height: 'calc(100vh - 140px)' }}>
+          {/* TOP ROW */}
+          <Grid item xs={12} sx={{ height: 'calc(45% - 8px)' }}>
+            <Grid container spacing={1} sx={{ height: '100%' }}>
+              {/* TOP-LEFT: Latest Sensor Data */}
+              <Grid item xs={6} sx={{ height: '100%' }}>
+                <Paper elevation={4} className="main-card" sx={{ height: '100%', padding: '12px' }}>
+                  <Typography variant="h6" gutterBottom className="card-title" sx={{ mb: 1 }}>
+                    📊 Latest Sensor Data
+                  </Typography>
+                  <Box className="sensor-cards-container">
+                    {Array.from({ length: 3 }).map((_, rowIdx) => (
+                      <Box className="sensor-cards-row" key={rowIdx}>
+                        {sensorKeys.slice(rowIdx * 2, rowIdx * 2 + 2).map((key) => (
+                          <Box sx={{ flex: 1 }} key={key}>
+                            <SensorCard
+                              sensorKey={key}
+                              title={getSensorName(key)}
+                              value={sensorData[key].value}
+                              status={sensorData[key].status}
+                            />
+                          </Box>
+                        ))}
+                      </Box>
+                    ))}
                   </Box>
-                  <Box sx={{ flex: 1 }}>
-                    <SensorCard
-                      sensorKey="humidity"
-                      title={getSensorName('humidity')}
-                      value={sensorData.humidity.value}
-                      status={sensorData.humidity.status}
-                    />
-                  </Box>
-                </Box>
-                
-                <Box className="sensor-cards-row">
-                  <Box sx={{ flex: 1 }}>
-                    <SensorCard
-                      sensorKey="ldrValue"
-                      title={getSensorName('ldrValue')}
-                      value={sensorData.ldrValue.value}
-                      status={sensorData.ldrValue.status}
-                    />
-                  </Box>
-                  <Box sx={{ flex: 1 }}>
-                    <SensorCard
-                      sensorKey="rainValue"
-                      title={getSensorName('rainValue')}
-                      value={sensorData.rainValue.value}
-                      status={sensorData.rainValue.status}
-                    />
-                  </Box>
-                </Box>
-                
-                <Box className="sensor-cards-row">
-                  <Box sx={{ flex: 1 }}>
-                    <SensorCard
-                      sensorKey="airQualityPPM"
-                      title={getSensorName('airQualityPPM')}
-                      value={sensorData.airQualityPPM.value}
-                      status={sensorData.airQualityPPM.status}
-                    />
-                  </Box>
-                  <Box sx={{ flex: 1 }}>
-                    <SensorCard
-                      sensorKey="soilMoisture"
-                      title={getSensorName('soilMoisture')}
-                      value={sensorData.soilMoisture.value}
-                      status={sensorData.soilMoisture.status}
-                    />
-                  </Box>
-                </Box>
-              </Box>
-            </Paper>
-          </Grid>
+                </Paper>
+              </Grid>
 
-          {/* Right Column: Historical Data */}
-          <Grid item xs={6}>
-            <Paper elevation={4} className="historical-card">
-              <Box className="historical-header">
-                <Typography variant="h5" className="card-title">
-                  📈 Historical Trends
-                </Typography>
-                <TimeRangeSelector />
-              </Box>
-              
-              <Box className="historical-content">
-                <Grid container spacing={1}>
-                  <Grid item xs={4}>
-                    <SensorGraph sensorKey="temperature" title={getSensorName('temperature')} />
-                  </Grid>
-                  <Grid item xs={4}>
-                    <SensorGraph sensorKey="humidity" title={getSensorName('humidity')} />
-                  </Grid>
-                  <Grid item xs={4}>
-                    <SensorGraph sensorKey="ldrValue" title={getSensorName('ldrValue')} />
-                  </Grid>
-                </Grid>
-                
-                <Grid container spacing={1}>
-                  <Grid item xs={4}>
-                    <SensorGraph sensorKey="rainValue" title={getSensorName('rainValue')} />
-                  </Grid>
-                  <Grid item xs={4}>
-                    <SensorGraph sensorKey="airQualityPPM" title={getSensorName('airQualityPPM')} />
-                  </Grid>
-                  <Grid item xs={4}>
-                    <SensorGraph sensorKey="soilMoisture" title={getSensorName('soilMoisture')} />
-                  </Grid>
-                </Grid>
-              </Box>
-            </Paper>
-          </Grid>
-
-          {/* Bottom Row: Data Table */}
-          <Grid item xs={12}>
-            <Paper elevation={4} className="table-card">
-              <Box className="table-header">
-                <Typography variant="h5" className="card-title">
-                  📊 Sensor Data History
-                </Typography>
-                <TextField
-                  label="Search by Date (YYYY-MM-DD)"
-                  variant="outlined"
-                  size="small"
-                  value={searchDate}
-                  onChange={(e) => setSearchDate(e.target.value)}
-                  className="search-field"
-                />
-              </Box>
-              <TableContainer className="table-container">
-                <Table stickyHeader size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell sx={{ borderRadius: '8px 0 0 0', fontWeight: 'bold' }}>Date</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>Time</TableCell>
-                      {Object.keys(sensorData).map((key) => (
-                        <TableCell key={key} align="center" sx={{ fontWeight: 'bold' }}>
-                          {getSensorIcon(key)} {getSensorName(key)}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {filteredTableData.map((row, index) => {
-                      const date = new Date(row.timestamp);
-                      const isDateValid = row.timestamp && !isNaN(date);
-
-                      return (
-                        <TableRow key={index} hover>
-                          <TableCell>
-                            {isDateValid ? date.toLocaleDateString() : 'N/A'}
-                          </TableCell>
-                          <TableCell>
-                            {isDateValid ? date.toLocaleTimeString() : 'N/A'}
-                          </TableCell>
+              {/* TOP-RIGHT: Sensor Data History */}
+              <Grid item xs={6} sx={{ height: '100%' }}>
+                <Paper elevation={4} className="table-card" sx={{ height: '100%', padding: '12px' }}>
+                  <Box className="table-header" sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', pb: 0.5, mb: 1, borderBottom: '1px solid #e0e0e0' }}>
+                    <Typography variant="h6" className="card-title" sx={{ mb: 0, borderBottom: 'none', pb: 0 }}>
+                      📊 Sensor Data History
+                    </Typography>
+                    <TextField
+                      label="Search by Date"
+                      variant="outlined"
+                      size="small"
+                      value={searchDate}
+                      onChange={(e) => setSearchDate(e.target.value)}
+                      className="search-field"
+                      sx={{ marginLeft: 'auto', position: 'relative', top: '-4px', '& .MuiInputBase-input': { fontSize: '0.8rem' } }}
+                    />
+                  </Box>
+                  <TableContainer className="table-container" sx={{ maxHeight: 'calc(100% - 60px)', overflowY: 'auto', width: '100%' }}>
+                    <Table stickyHeader size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ borderRadius: '8px 0 0 0', fontWeight: 'bold' }}>Date</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Time</TableCell>
                           {Object.keys(sensorData).map((key) => (
-                            <TableCell key={key} align="center">
-                              <Box className="table-cell-value">
-                                <Typography variant="body2" className="table-value" style={{ color: getStatusColor(sensorData[key]?.status, key) }}>
-                                  {row[key] || '-'}
-                                </Typography>
-                                <Typography variant="caption" className="table-status">
-                                  {sensorData[key]?.status.toUpperCase()}
-                                </Typography>
-                              </Box>
+                            <TableCell key={key} align="center" sx={{ fontWeight: 'bold' }}>
+                              {getSensorIcon(key)} {getSensorName(key)}
                             </TableCell>
                           ))}
                         </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Paper>
+                      </TableHead>
+                      <TableBody>
+                        {filteredTableData.map((row, index) => {
+                          const date = new Date(row.timestamp);
+                          const isDateValid = row.timestamp && !isNaN(date);
+
+                          return (
+                            <TableRow key={index} hover>
+                              <TableCell>
+                                {isDateValid ? date.toLocaleDateString() : 'N/A'}
+                              </TableCell>
+                              <TableCell>
+                                {isDateValid ? date.toLocaleTimeString() : 'N/A'}
+                              </TableCell>
+                              {Object.keys(sensorData).map((key) => (
+                                <TableCell key={key} align="center">
+                                  <Box className="table-cell-value">
+                                    <Typography variant="body2" className="table-value" style={{ color: getStatusColor(sensorData[key]?.status, key) }}>
+                                      {row[key] || '-'}
+                                    </Typography>
+                                    <Typography variant="caption" className="table-status">
+                                      {sensorData[key]?.status.toUpperCase()}
+                                    </Typography>
+                                  </Box>
+                                </TableCell>
+                              ))}
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Paper>
+              </Grid>
+            </Grid>
+          </Grid>
+
+          {/* BOTTOM ROW */}
+          <Grid item xs={12} sx={{ height: 'calc(55% + 8px)' }}>
+            <Grid container spacing={1} sx={{ height: '100%' }}>
+              {/* BOTTOM-LEFT: Historical Trends */}
+              <Grid item xs={8} sx={{ height: '100%' }}>
+                <Paper elevation={4} className="historical-card" sx={{ height: '100%', padding: '12px' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', pb: 0.5, mb: 1, borderBottom: '1px solid #e0e0e0' }}>
+                    <Typography variant="h6" className="card-title" sx={{ mb: 0, borderBottom: 'none', pb: 0 }}>
+                      📈 Historical Trends
+                    </Typography>
+                    <Box sx={{ mt: '-2px' }}>
+                      <TimeRangeSelector />
+                    </Box>
+                  </Box>
+                  <Box className="historical-content" sx={{ height: 'calc(100% - 50px)' }}>
+                    {[0, 1].map((rowIdx) => (
+                      <Grid container spacing={0.5} key={rowIdx} sx={{ mb: rowIdx === 0 ? 1 : 0, height: rowIdx === 0 ? 'calc(50% - 8px)' : 'calc(50% - 8px)' }}>
+                        {sensorKeys.slice(rowIdx * 3, rowIdx * 3 + 3).map((key) => (
+                          <Grid item xs={4} key={key} sx={{ height: '100%' }}>
+                            <SensorGraph sensorKey={key} title={getSensorName(key)} />
+                          </Grid>
+                        ))}
+                      </Grid>
+                    ))}
+                  </Box>
+                </Paper>
+              </Grid>
+
+              {/* BOTTOM-RIGHT: Average Sensor Values */}
+              <Grid item xs={4} sx={{ height: '100%' }}>
+                <Paper elevation={4} className="main-card" sx={{ height: '100%', padding: '12px' }}>
+                  <Typography variant="h6" gutterBottom className="card-title" sx={{ mb: 1 }}>
+                    🧮 Average Sensor Values
+                  </Typography>
+                  <Box className="sensor-cards-container">
+                    {[0, 1, 2].map((rowIdx) => (
+                      <Box className="sensor-cards-row" key={rowIdx}>
+                        {sensorKeys.slice(rowIdx * 2, rowIdx * 2 + 2).map((key) => {
+                          // Use backend thresholds for status
+                          let status;
+                          if (key === 'temperature') status = getStatus(averageSensorData[key], 20, 25);
+                          else if (key === 'humidity') status = getStatus(averageSensorData[key], 70, 80);
+                          else if (key === 'ldrValue') status = getStatus(averageSensorData[key], 400, 600, true);
+                          else if (key === 'rainValue') status = getStatus(averageSensorData[key], 880, 940, true);
+                          else if (key === 'airQualityPPM') status = getStatus(averageSensorData[key], 400, 800);
+                          else if (key === 'soilMoisture') status = getStatus(averageSensorData[key], 200, 400);
+                          else status = 'medium';
+                          return (
+                            <Box sx={{ flex: 1 }} key={key}>
+                              <SensorCard
+                                sensorKey={key}
+                                title={getSensorName(key)}
+                                value={averageSensorData[key] ? averageSensorData[key].toFixed(1) : '-'}
+                                status={status}
+                              />
+                            </Box>
+                          );
+                        })}
+                      </Box>
+                    ))}
+                  </Box>
+                </Paper>
+              </Grid>
+            </Grid>
           </Grid>
         </Grid>
       </Container>
@@ -579,4 +612,4 @@ function App() {
   );
 }
 
-export default App; 
+export default App;
