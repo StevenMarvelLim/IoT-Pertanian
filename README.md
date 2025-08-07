@@ -27,8 +27,12 @@ CREATE TABLE sensor_data (
     temperature FLOAT,
     humidity FLOAT,
     soil_moisture FLOAT,
+    ldr_value FLOAT,
+    rain_value FLOAT,
+    air_quality_ppm FLOAT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
 ```
 
 ### 2. Backend Setup
