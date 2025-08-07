@@ -21,16 +21,17 @@ pertanian/
 - Create database named 'iot_pertanian'
 - Create table in the database named 'sensor_data' using these SQL:
 ```
-CREATE TABLE sensor_data (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    sensor_id VARCHAR(50),
-    temperature FLOAT,
-    humidity FLOAT,
-    soil_moisture FLOAT,
-    ldr_value FLOAT,
-    rain_value FLOAT,
-    air_quality_ppm FLOAT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE sensor_readings (
+    id INT(11) NOT NULL AUTO_INCREMENT,
+    timestamp DATETIME NOT NULL,
+    temperature FLOAT NOT NULL,
+    humidity FLOAT NOT NULL,
+    ldrValue INT(11) NOT NULL,
+    rainValue INT(11) DEFAULT NULL,
+    airQualityPPM FLOAT NOT NULL,
+    soilMoisture INT(11) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
 );
 ```
 
