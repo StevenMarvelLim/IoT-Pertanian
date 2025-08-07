@@ -21,7 +21,7 @@ pertanian/
 - Create database named 'iot_pertanian'
 - Create table in the database named 'sensor_data' using these SQL:
 ```
-CREATE TABLE sensor_readings (
+CREATE TABLE sensor_data (
     id INT(11) NOT NULL AUTO_INCREMENT,
     timestamp DATETIME NOT NULL,
     temperature FLOAT NOT NULL,
