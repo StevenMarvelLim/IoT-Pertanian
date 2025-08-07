@@ -32,7 +32,6 @@ CREATE TABLE sensor_data (
     air_quality_ppm FLOAT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
 ```
 
 ### 2. Backend Setup
