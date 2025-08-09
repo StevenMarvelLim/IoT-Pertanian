@@ -59,7 +59,7 @@ function App() {
     timeRange: 24
   });
 
-  const [timeRange, setTimeRange] = useState(24);
+  const [timeRange, setTimeRange] = useState('current');
   const [tableData, setTableData] = useState([]);
   const [searchDate, setSearchDate] = useState('');
   const [averageSensorData, setAverageSensorData] = useState({
@@ -83,23 +83,20 @@ function App() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Fetch latest data
         const latestResponse = await fetch('http://localhost:3001/api/sensors/latest');
         const latestData = await latestResponse.json();
         setSensorData(latestData);
 
-        // Fetch historical data with time range
-        const historicalResponse = await fetch(`http://localhost:3001/api/sensors/historical?hours=${timeRange}`);
-        const newHistoricalData = await historicalResponse.json();
-        
-        // Update time range if it doesn't match the response
-        if (newHistoricalData.timeRange !== timeRange) {
-          setTimeRange(newHistoricalData.timeRange);
+        let historicalUrl = 'http://localhost:3001/api/sensors/historical';
+        if (timeRange === 'current') {
+          historicalUrl += '?hours=1';
+        } else {
+          historicalUrl += `?hours=${timeRange}`;
         }
-        
+        const historicalResponse = await fetch(historicalUrl);
+        const newHistoricalData = await historicalResponse.json();
         setHistoricalData(newHistoricalData);
 
-        // Fetch table data
         const tableResponse = await fetch('http://localhost:3001/api/sensors/table');
         let tableData = await tableResponse.json();
         if (!Array.isArray(tableData)) {
@@ -116,13 +113,14 @@ function App() {
     return () => clearInterval(interval);
   }, [timeRange]);
 
-  // Fetch average sensor data when timeRange or searchDate changes
   useEffect(() => {
     const fetchAverage = async () => {
       try {
         let url = 'http://localhost:3001/api/sensors/average';
         if (searchDate) {
           url += `?date=${searchDate}`;
+        } else if (timeRange === 'current') {
+          url += '?hours=1';
         } else if (timeRange) {
           url += `?hours=${timeRange}`;
         }
@@ -149,7 +147,6 @@ function App() {
       if (status === 'low') return '#4caf50';
     }
 
-    // Color logic for Light (ldrValue)
     if (sensorKey === 'ldrValue') {
       if (status === 'high') return '#4caf50';
       if (status === 'low') return '#f44336';
@@ -216,13 +213,11 @@ function App() {
       case 'ldrValue':
         return 'Light';
       default:
-        // Handle camelCase by splitting on uppercase letters
         const words = key.replace(/([A-Z])/g, ' $1');
         return words.charAt(0).toUpperCase() + words.slice(1);
     }
   };
 
-  // Helper to get status for average values (replicates backend logic)
   const getStatus = (value, lowThreshold, highThreshold, isInverted = false) => {
     if (isInverted) {
       if (value > highThreshold) return 'low';
@@ -275,6 +270,7 @@ function App() {
             label="Time Range"
             onChange={(e) => setTimeRange(e.target.value)}
           >
+            <MenuItem value="current">Current</MenuItem>
             <MenuItem value={1}>Last Hour</MenuItem>
             <MenuItem value={6}>Last 6 Hours</MenuItem>
             <MenuItem value={12}>Last 12 Hours</MenuItem>
@@ -390,28 +386,35 @@ function App() {
                 spanGaps: true
               }]
             }}
-            options={{
-              ...options,
-              animation: {
-                duration: 0
-              },
-              hover: {
-                animationDuration: 0
-              },
-              responsiveAnimationDuration: 0,
-              elements: {
-                line: {
-                  tension: 0.4
-                }
-              },
-              plugins: {
-                ...options.plugins,
-                decimation: {
-                  enabled: true,
-                  algorithm: 'min-max'
-                }
-              }
-            }}
+                         options={{
+               ...options,
+               animation: {
+                 duration: 0
+               },
+               hover: {
+                 animationDuration: 0
+               },
+               responsiveAnimationDuration: 0,
+               elements: {
+                 line: {
+                   tension: 0.4
+                 }
+               },
+               plugins: {
+                 ...options.plugins,
+                 decimation: {
+                   enabled: true,
+                   algorithm: 'min-max'
+                 }
+               },
+               transitions: {
+                 active: {
+                   animation: {
+                     duration: 0
+                   }
+                 }
+               }
+             }}
           />
         </Box>
       </Paper>
@@ -475,7 +478,6 @@ function App() {
                 </Paper>
               </Grid>
 
-              {/* TOP-RIGHT: Sensor Data History */}
               <Grid item xs={6} sx={{ height: '100%' }}>
                 <Paper elevation={4} className="table-card" sx={{ height: '100%', padding: '12px' }}>
                   <Box className="table-header" sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', pb: 0.5, mb: 1, borderBottom: '1px solid #e0e0e0' }}>
@@ -579,7 +581,6 @@ function App() {
                     {[0, 1, 2].map((rowIdx) => (
                       <Box className="sensor-cards-row" key={rowIdx}>
                         {sensorKeys.slice(rowIdx * 2, rowIdx * 2 + 2).map((key) => {
-                          // Use backend thresholds for status
                           let status;
                           if (key === 'temperature') status = getStatus(averageSensorData[key], 20, 25);
                           else if (key === 'humidity') status = getStatus(averageSensorData[key], 70, 80);

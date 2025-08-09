@@ -7,357 +7,114 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MySQL connection
-const db = mysql.createConnection({
+const pool = mysql.createPool({
   host: 'localhost',
   user: 'root',
   password: '',
-  database: 'iot_pertanian'
+  database: 'iot_pertanian',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  acquireTimeout: 60000,
+  timeout: 60000,
+  reconnect: true
 });
 
-// Connect to MySQL
-db.connect((err) => {
-  if (err) {
-    console.error('Error connecting to MySQL:', err);
-    console.error('Please make sure:');
-    console.error('1. MySQL service is running in XAMPP');
-    console.error('2. Database "iot_pertanian" exists');
-    console.error('3. MySQL credentials are correct');
-    return;
+const db = pool.promise();
+
+const cache = new Map();
+const CACHE_TTL = 5000;
+
+async function getCachedData(key, fetchFunction, ttl = CACHE_TTL) {
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < ttl) {
+    return cached.data;
   }
-  console.log('Connected to MySQL database');
-
-  // Create database if it doesn't exist
-  db.query('CREATE DATABASE IF NOT EXISTS iot_pertanian', (err) => {
-    if (err) {
-      console.error('Error creating database:', err);
-      return;
-    }
-    console.log('Database iot_pertanian ready');
-
-    // Use the database
-    db.query('USE iot_pertanian', (err) => {
-      if (err) {
-        console.error('Error selecting database:', err);
-        return;
-      }
-
-      // Create table if it doesn't exist
-      const createTableQuery = `
-        CREATE TABLE IF NOT EXISTS sensor_data (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          temperature FLOAT,
-          humidity FLOAT,
-          ldrValue INT,
-          rainValue INT,
-          airQualityPPM FLOAT,
-          soilMoisture INT,
-          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `;
-
-      db.query(createTableQuery, (err) => {
-        if (err) {
-          console.error('Error creating table:', err);
-          return;
-        }
-        console.log('Sensor data table ready');
-
-        // Insert sample data if table is empty
-        db.query('SELECT COUNT(*) as count FROM sensor_data', (err, results) => {
-          if (err) {
-            console.error('Error checking table data:', err);
-            return;
-          }
-
-          if (results[0].count === 0) {
-            console.log('Inserting sample data...');
-            
-            // Generate 10 sample data points
-            const now = new Date();
-            const sampleDataPoints = Array.from({ length: 10 }, (_, i) => {
-              const timestamp = new Date(now - (9 - i) * 60000);
-              return {
-                temperature: 25 + Math.random() * 5,
-                humidity: 60 + Math.random() * 10,
-                ldrValue: 500 + Math.random() * 200,
-                rainValue: 600 + Math.random() * 200,
-                airQualityPPM: 7 + Math.random() * 3,
-                soilMoisture: 500 + Math.random() * 200,
-                timestamp: timestamp.toISOString().slice(0, 19).replace('T', ' ')
-              };
-            });
-
-            // Insert each sample data point
-            sampleDataPoints.forEach(data => {
-              const query = `
-                INSERT INTO sensor_data 
-                (temperature, humidity, ldrValue, rainValue, airQualityPPM, soilMoisture, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-              `;
-
-              db.query(
-                query,
-                [
-                  data.temperature,
-                  data.humidity,
-                  data.ldrValue,
-                  data.rainValue,
-                  data.airQualityPPM,
-                  data.soilMoisture,
-                  data.timestamp
-                ],
-                (err) => {
-                  if (err) {
-                    console.error('Error inserting sample data:', err);
-                  }
-                }
-              );
-            });
-            
-            console.log('Sample data points inserted successfully');
-          }
-        });
-      });
-    });
-  });
-});
-
-// Data validation
-function validateSensorData(data) {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    typeof data.temperature === 'number' &&
-    typeof data.humidity === 'number' &&
-    typeof data.ldrValue === 'number' &&
-    typeof data.rainValue === 'number' &&
-    typeof data.airQualityPPM === 'number' &&
-    typeof data.soilMoisture === 'number' &&
-    typeof data.timestamp === 'string'
-  );
+  
+  const data = await fetchFunction();
+  cache.set(key, { data, timestamp: Date.now() });
+  return data;
 }
 
-// API Endpoints
-app.post('/api/sensors/data', (req, res) => {
-  if (!validateSensorData(req.body)) {
-    return res.status(400).json({ error: 'Invalid sensor data format' });
-  }
+async function initializeDatabase() {
+  try {
+    await db.query('CREATE DATABASE IF NOT EXISTS iot_pertanian');
+    await db.query('USE iot_pertanian');
+    
+    const createTableQuery = `
+      CREATE TABLE IF NOT EXISTS sensor_data (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        temperature FLOAT,
+        humidity FLOAT,
+        ldrValue INT,
+        rainValue INT,
+        airQualityPPM FLOAT,
+        soilMoisture INT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_timestamp (timestamp)
+      )
+    `;
+    
+    await db.query(createTableQuery);
+    
+    const [countResult] = await db.query('SELECT COUNT(*) as count FROM sensor_data');
+    
+    if (countResult[0].count === 0) {
+      console.log('Inserting sample data...');
+      
+      const now = new Date();
+      const sampleDataPoints = Array.from({ length: 10 }, (_, i) => {
+        const timestamp = new Date(now - (9 - i) * 60000);
+        return [
+          25 + Math.random() * 5,
+          60 + Math.random() * 10,
+          500 + Math.random() * 200,
+          600 + Math.random() * 200,
+          7 + Math.random() * 3,
+          500 + Math.random() * 200,
+          timestamp.toISOString().slice(0, 19).replace('T', ' ')
+        ];
+      });
 
-  const { temperature, humidity, ldrValue, rainValue, airQualityPPM, soilMoisture, timestamp } = req.body;
-  
-  const query = `
-    INSERT INTO sensor_data 
-    (temperature, humidity, ldrValue, rainValue, airQualityPPM, soilMoisture, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, STR_TO_DATE(?, '%Y-%m-%d %H:%i:%s'))
-  `;
-
-  db.query(
-    query,
-    [temperature, humidity, ldrValue, rainValue, airQualityPPM, soilMoisture, timestamp],
-    (err, results) => {
-      if (err) {
-        console.error('Error saving sensor data:', err);
-        return res.status(500).json({ error: 'Error saving sensor data', details: err.message });
-      }
-      res.json({ message: 'Sensor data saved successfully', id: results.insertId });
-    }
-  );
-});
-
-// Get latest sensor data
-app.get('/api/sensors/latest', (req, res) => {
-  const query = 'SELECT * FROM sensor_data ORDER BY timestamp DESC LIMIT 1';
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching latest data:', err);
-      return res.status(500).json({ error: 'Error fetching latest data' });
+      const insertQuery = `
+        INSERT INTO sensor_data 
+        (temperature, humidity, ldrValue, rainValue, airQualityPPM, soilMoisture, timestamp)
+        VALUES ?
+      `;
+      
+      await db.query(insertQuery, [sampleDataPoints]);
+      console.log('Sample data inserted successfully');
     }
     
-    if (results.length === 0) {
-      return res.json({
-        temperature: { value: 0, status: 'medium' },
-        humidity: { value: 0, status: 'medium' },
-        ldrValue: { value: 0, status: 'medium' },
-        rainValue: { value: 0, status: 'medium' },
-        airQualityPPM: { value: 0, status: 'medium' },
-        soilMoisture: { value: 0, status: 'medium' }
-      });
-    }
-
-    const data = results[0];
-    res.json({
-      temperature: { value: data.temperature, status: getStatus(data.temperature, 20, 25) },
-      humidity: { value: data.humidity, status: getStatus(data.humidity, 70, 80) },
-      ldrValue: { value: data.ldrValue, status: getStatus(data.ldrValue, 400, 600, true) },
-      rainValue: { value: data.rainValue, status: getStatus(data.rainValue, 880, 940, true) },
-      airQualityPPM: { value: data.airQualityPPM, status: getStatus(data.airQualityPPM, 400, 800) },
-      soilMoisture: { value: data.soilMoisture, status: getStatus(data.soilMoisture, 200, 400) }
-    });
-  });
-});
-
-// Get historical sensor data
-app.get('/api/sensors/historical', (req, res) => {
-  const { hours = 24 } = req.query;
-  
-  const query = `
-    SELECT * FROM sensor_data 
-    WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)
-    AND timestamp <= NOW()
-    ORDER BY timestamp ASC`;
-  
-  db.query(query, [hours], (err, results) => {
-    if (err) {
-      console.error('Error fetching historical data:', err);
-      return res.status(500).json({ error: 'Error fetching historical data' });
-    }
-
-    // If no results, return empty structure
-    if (!results || results.length === 0) {
-      return res.json({
-        labels: [],
-        datasets: {
-          temperature: [],
-          humidity: [],
-          ldrValue: [],
-          rainValue: [],
-          airQualityPPM: [],
-          soilMoisture: []
-        }
-      });
-    }
-
-    // Format timestamps with full date information
-    const labels = results.map(r => {
-      const date = new Date(r.timestamp);
-      return {
-        display: date.toLocaleString('en-US', { 
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit', 
-          minute: '2-digit',
-          hour12: false 
-        }),
-        timestamp: date.getTime()
-      };
-    });
-
-    // Ensure all data points exist with proper number formatting
-    const datasets = {
-      temperature: results.map(r => Number(r.temperature) || 0),
-      humidity: results.map(r => Number(r.humidity) || 0),
-      ldrValue: results.map(r => Number(r.ldrValue) || 0),
-      rainValue: results.map(r => Number(r.rainValue) || 0),
-      airQualityPPM: results.map(r => Number(r.airQualityPPM) || 0),
-      soilMoisture: results.map(r => Number(r.soilMoisture) || 0)
-    };
-
-    res.json({ 
-      labels,
-      datasets,
-      timeRange: Number(hours)
-    });
-  });
-});
-
-// Get table data
-app.get('/api/sensors/table', (req, res) => {
-  const query = `
-    SELECT 
-      id,
-      temperature,
-      humidity,
-      ldrValue,
-      rainValue,
-      airQualityPPM,
-      soilMoisture,
-      timestamp
-    FROM sensor_data 
-    ORDER BY timestamp DESC 
-    LIMIT 1000
-  `;
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching table data:', err);
-      return res.status(500).json({ error: 'Error fetching table data' });
-    }
-    res.json(results);
-  });
-});
-
-app.get('/api/sensors/average', (req, res) => {
-  const { hours, date } = req.query;
-  let query = '';
-  let params = [];
-
-  if (date) {
-    // Average for a specific date (YYYY-MM-DD)
-    query = `SELECT 
-      AVG(temperature) AS temperature,
-      AVG(humidity) AS humidity,
-      AVG(ldrValue) AS ldrValue,
-      AVG(rainValue) AS rainValue,
-      AVG(airQualityPPM) AS airQualityPPM,
-      AVG(soilMoisture) AS soilMoisture
-    FROM sensor_data
-    WHERE DATE(timestamp) = ?`;
-    params = [date];
-  } else if (hours) {
-    // Average for the last N hours
-    query = `SELECT 
-      AVG(temperature) AS temperature,
-      AVG(humidity) AS humidity,
-      AVG(ldrValue) AS ldrValue,
-      AVG(rainValue) AS rainValue,
-      AVG(airQualityPPM) AS airQualityPPM,
-      AVG(soilMoisture) AS soilMoisture
-    FROM sensor_data
-    WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)
-      AND timestamp <= NOW()`;
-    params = [hours];
-  } else {
-    // Average for all data
-    query = `SELECT 
-      AVG(temperature) AS temperature,
-      AVG(humidity) AS humidity,
-      AVG(ldrValue) AS ldrValue,
-      AVG(rainValue) AS rainValue,
-      AVG(airQualityPPM) AS airQualityPPM,
-      AVG(soilMoisture) AS soilMoisture
-    FROM sensor_data`;
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database:', error);
+    throw error;
   }
+}
 
-  db.query(query, params, (err, results) => {
-    if (err) {
-      console.error('Error fetching average sensor values:', err);
-      return res.status(500).json({ error: 'Error fetching average sensor values' });
-    }
-    if (!results || results.length === 0) {
-      return res.json({
-        temperature: 0,
-        humidity: 0,
-        ldrValue: 0,
-        rainValue: 0,
-        airQualityPPM: 0,
-        soilMoisture: 0
-      });
-    }
-    const data = results[0];
-    res.json({
-      temperature: Number(data.temperature) || 0,
-      humidity: Number(data.humidity) || 0,
-      ldrValue: Number(data.ldrValue) || 0,
-      rainValue: Number(data.rainValue) || 0,
-      airQualityPPM: Number(data.airQualityPPM) || 0,
-      soilMoisture: Number(data.soilMoisture) || 0
-    });
+initializeDatabase().catch(console.error);
+
+function validateSensorData(data) {
+  const required = ['temperature', 'humidity', 'ldrValue', 'rainValue', 'airQualityPPM', 'soilMoisture'];
+  const missing = required.filter(field => !(field in data));
+  
+  if (missing.length > 0) {
+    return { valid: false, error: `Missing required fields: ${missing.join(', ')}` };
+  }
+  
+  const numeric = required.filter(field => {
+    const value = data[field];
+    return typeof value === 'number' && !isNaN(value);
   });
-});
+  
+  if (numeric.length !== required.length) {
+    return { valid: false, error: 'All sensor values must be numeric' };
+  }
+  
+  return { valid: true };
+}
 
-// Helper function to determine status
 function getStatus(value, lowThreshold, highThreshold, isInverted = false) {
   if (isInverted) {
     if (value > highThreshold) return 'low';
@@ -370,13 +127,268 @@ function getStatus(value, lowThreshold, highThreshold, isInverted = false) {
   }
 }
 
-// Error handling middleware
+app.post('/api/sensors', async (req, res) => {
+  try {
+    const sensorData = req.body;
+    const validation = validateSensorData(sensorData);
+    
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.error });
+    }
+    
+    const query = `
+      INSERT INTO sensor_data 
+      (temperature, humidity, ldrValue, rainValue, airQualityPPM, soilMoisture)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+    
+    const values = [
+      sensorData.temperature,
+      sensorData.humidity,
+      sensorData.ldrValue,
+      sensorData.rainValue,
+      sensorData.airQualityPPM,
+      sensorData.soilMoisture
+    ];
+    
+    await db.query(query, values);
+    
+    cache.clear();
+    
+    res.json({ message: 'Sensor data received successfully' });
+  } catch (error) {
+    console.error('Error saving sensor data:', error);
+    res.status(500).json({ error: 'Error saving sensor data' });
+  }
+});
+
+app.get('/api/sensors/latest', async (req, res) => {
+  try {
+    const data = await getCachedData('latest', async () => {
+      const [results] = await db.query(`
+        SELECT * FROM sensor_data 
+        ORDER BY timestamp DESC 
+        LIMIT 1
+      `);
+      
+      if (!results || results.length === 0) {
+        return {
+          temperature: { value: 0, status: 'medium' },
+          humidity: { value: 0, status: 'medium' },
+          ldrValue: { value: 0, status: 'medium' },
+          rainValue: { value: 0, status: 'medium' },
+          airQualityPPM: { value: 0, status: 'medium' },
+          soilMoisture: { value: 0, status: 'medium' }
+        };
+      }
+      
+      const latest = results[0];
+      return {
+        temperature: { 
+          value: Number(latest.temperature), 
+          status: getStatus(Number(latest.temperature), 20, 25) 
+        },
+        humidity: { 
+          value: Number(latest.humidity), 
+          status: getStatus(Number(latest.humidity), 70, 80) 
+        },
+        ldrValue: { 
+          value: Number(latest.ldrValue), 
+          status: getStatus(Number(latest.ldrValue), 400, 600, true) 
+        },
+        rainValue: { 
+          value: Number(latest.rainValue), 
+          status: getStatus(Number(latest.rainValue), 880, 940, true) 
+        },
+        airQualityPPM: { 
+          value: Number(latest.airQualityPPM), 
+          status: getStatus(Number(latest.airQualityPPM), 400, 800) 
+        },
+        soilMoisture: { 
+          value: Number(latest.soilMoisture), 
+          status: getStatus(Number(latest.soilMoisture), 200, 400) 
+        }
+      };
+    });
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching latest data:', error);
+    res.status(500).json({ error: 'Error fetching latest data' });
+  }
+});
+
+app.get('/api/sensors/historical', async (req, res) => {
+  try {
+    const { hours = 24 } = req.query;
+    const cacheKey = `historical_${hours}`;
+    
+    const data = await getCachedData(cacheKey, async () => {
+      const [results] = await db.query(`
+        SELECT * FROM sensor_data 
+        WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+        AND timestamp <= NOW()
+        ORDER BY timestamp ASC
+      `, [hours]);
+      
+      if (!results || results.length === 0) {
+        return {
+          labels: [],
+          datasets: {
+            temperature: [],
+            humidity: [],
+            ldrValue: [],
+            rainValue: [],
+            airQualityPPM: [],
+            soilMoisture: []
+          }
+        };
+      }
+      
+      const labels = results.map(r => {
+        const date = new Date(r.timestamp);
+        return {
+          display: date.toLocaleString('en-US', { 
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: false 
+          }),
+          timestamp: date.getTime()
+        };
+      });
+      
+      const datasets = {
+        temperature: results.map(r => Number(r.temperature) || 0),
+        humidity: results.map(r => Number(r.humidity) || 0),
+        ldrValue: results.map(r => Number(r.ldrValue) || 0),
+        rainValue: results.map(r => Number(r.rainValue) || 0),
+        airQualityPPM: results.map(r => Number(r.airQualityPPM) || 0),
+        soilMoisture: results.map(r => Number(r.soilMoisture) || 0)
+      };
+      
+      return { 
+        labels,
+        datasets,
+        timeRange: Number(hours)
+      };
+    });
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching historical data:', error);
+    res.status(500).json({ error: 'Error fetching historical data' });
+  }
+});
+
+app.get('/api/sensors/table', async (req, res) => {
+  try {
+    const data = await getCachedData('table', async () => {
+      const [results] = await db.query(`
+        SELECT 
+          id,
+          temperature,
+          humidity,
+          ldrValue,
+          rainValue,
+          airQualityPPM,
+          soilMoisture,
+          timestamp
+        FROM sensor_data 
+        ORDER BY timestamp DESC 
+        LIMIT 1000
+      `);
+      
+      return results;
+    });
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching table data:', error);
+    res.status(500).json({ error: 'Error fetching table data' });
+  }
+});
+
+app.get('/api/sensors/average', async (req, res) => {
+  try {
+    const { hours, date } = req.query;
+    const cacheKey = `average_${hours || 'all'}_${date || 'no_date'}`;
+    
+    const data = await getCachedData(cacheKey, async () => {
+      let query = '';
+      let params = [];
+      
+      if (date) {
+        query = `SELECT 
+          AVG(temperature) AS temperature,
+          AVG(humidity) AS humidity,
+          AVG(ldrValue) AS ldrValue,
+          AVG(rainValue) AS rainValue,
+          AVG(airQualityPPM) AS airQualityPPM,
+          AVG(soilMoisture) AS soilMoisture
+        FROM sensor_data
+        WHERE DATE(timestamp) = ?`;
+        params = [date];
+      } else if (hours) {
+        query = `SELECT 
+          AVG(temperature) AS temperature,
+          AVG(humidity) AS humidity,
+          AVG(ldrValue) AS ldrValue,
+          AVG(rainValue) AS rainValue,
+          AVG(airQualityPPM) AS airQualityPPM,
+          AVG(soilMoisture) AS soilMoisture
+        FROM sensor_data
+        WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+          AND timestamp <= NOW()`;
+        params = [hours];
+      } else {
+        query = `SELECT 
+          AVG(temperature) AS temperature,
+          AVG(humidity) AS humidity,
+          AVG(ldrValue) AS ldrValue,
+          AVG(rainValue) AS rainValue,
+          AVG(airQualityPPM) AS airQualityPPM,
+          AVG(soilMoisture) AS soilMoisture
+        FROM sensor_data`;
+      }
+      
+      const [results] = await db.query(query, params);
+      
+      if (!results || results.length === 0) {
+        return {
+          temperature: 0,
+          humidity: 0,
+          ldrValue: 0,
+          rainValue: 0,
+          airQualityPPM: 0,
+          soilMoisture: 0
+        };
+      }
+      
+      const data = results[0];
+      return {
+        temperature: Number(data.temperature) || 0,
+        humidity: Number(data.humidity) || 0,
+        ldrValue: Number(data.ldrValue) || 0,
+        rainValue: Number(data.rainValue) || 0,
+        airQualityPPM: Number(data.airQualityPPM) || 0,
+        soilMoisture: Number(data.soilMoisture) || 0
+      };
+    });
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching average sensor values:', error);
+    res.status(500).json({ error: 'Error fetching average sensor values' });
+  }
+});
+
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Something broke!' });
 });
 
-// Start server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

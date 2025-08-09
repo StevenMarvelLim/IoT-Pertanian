@@ -109,7 +109,6 @@ code {
   width: 100%;
   min-width: 200px;
   max-width: 250px;
-  transition: transform 0.2s;
   border-radius: 16px;
 }
 
@@ -189,4 +188,64 @@ code {
 
 .graph-content {
   min-height: 120px;
+}
+
+canvas {
+  animation: none !important;
+  transition: none !important;
+}
+
+.sensor-card {
+  transition: none !important;
+}
+
+.sensor-card:hover {
+  transform: none !important;
+}
+
+.MuiPaper-root:not(.MuiPopover-paper),
+.MuiButton-root,
+.MuiIconButton-root,
+.MuiTableRow-root,
+.MuiTableCell-root,
+.MuiTooltip-root {
+  transition: none !important;
+  animation: none !important;
+}
+
+.MuiSelect-root,
+.MuiTextField-root,
+.MuiFormControl-root {
+  transition: all 0.2s ease !important;
+}
+
+.MuiSelect-root:hover .MuiOutlinedInput-notchedOutline,
+.MuiTextField-root:hover .MuiOutlinedInput-notchedOutline {
+  border-color: #1976d2 !important;
+}
+
+.MuiMenuItem-root:hover {
+  background-color: rgba(25, 118, 210, 0.08) !important;
+  transition: background-color 0.2s ease !important;
+}
+
+.MuiSelect-select {
+  transition: none !important;
+}
+
+.MuiPopover-root {
+  transition: none !important;
+}
+
+.MuiPaper-root.MuiPopover-paper {
+  transition: none !important;
+  animation: none !important;
+}
+
+.MuiSelect-select:focus {
+  transition: none !important;
+}
+
+.MuiSelect-select:focus + .MuiSelect-icon {
+  transition: none !important;
 } 
