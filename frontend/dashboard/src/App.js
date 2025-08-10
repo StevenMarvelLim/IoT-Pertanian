@@ -26,11 +26,10 @@ import {
   LinearScale,
   PointElement,
   LineElement,
-  Title,
-  Tooltip as ChartTooltip,
-  Legend
+  Tooltip as ChartTooltip
 } from 'chart.js';
 import InfoIcon from '@mui/icons-material/Info';
+import { getSensorStatus } from './utils';
 import './App.css';
 
 ChartJS.register(
@@ -38,9 +37,7 @@ ChartJS.register(
   LinearScale,
   PointElement,
   LineElement,
-  Title,
-  ChartTooltip,
-  Legend
+  ChartTooltip
 );
 
 function App() {
@@ -71,14 +68,7 @@ function App() {
     soilMoisture: 0
   });
 
-  const sensorKeys = [
-    'temperature',
-    'humidity',
-    'ldrValue',
-    'rainValue',
-    'airQualityPPM',
-    'soilMoisture'
-  ];
+
 
   useEffect(() => {
     const fetchData = async () => {
@@ -218,17 +208,7 @@ function App() {
     }
   };
 
-  const getStatus = (value, lowThreshold, highThreshold, isInverted = false) => {
-    if (isInverted) {
-      if (value > highThreshold) return 'low';
-      if (value < lowThreshold) return 'high';
-      return 'medium';
-    } else {
-      if (value < lowThreshold) return 'low';
-      if (value > highThreshold) return 'high';
-      return 'medium';
-    }
-  };
+
 
   const SensorCard = ({ sensorKey, title, value, status }) => (
     <Paper
@@ -462,7 +442,7 @@ function App() {
                   <Box className="sensor-cards-container">
                     {Array.from({ length: 3 }).map((_, rowIdx) => (
                       <Box className="sensor-cards-row" key={rowIdx}>
-                        {sensorKeys.slice(rowIdx * 2, rowIdx * 2 + 2).map((key) => (
+                        {Object.keys(sensorData).slice(rowIdx * 2, rowIdx * 2 + 2).map((key) => (
                           <Box sx={{ flex: 1 }} key={key}>
                             <SensorCard
                               sensorKey={key}
@@ -560,7 +540,7 @@ function App() {
                   <Box className="historical-content" sx={{ height: 'calc(100% - 50px)' }}>
                     {[0, 1].map((rowIdx) => (
                       <Grid container spacing={0.5} key={rowIdx} sx={{ mb: rowIdx === 0 ? 1 : 0, height: rowIdx === 0 ? 'calc(50% - 8px)' : 'calc(50% - 8px)' }}>
-                        {sensorKeys.slice(rowIdx * 3, rowIdx * 3 + 3).map((key) => (
+                        {Object.keys(sensorData).slice(rowIdx * 3, rowIdx * 3 + 3).map((key) => (
                           <Grid item xs={4} key={key} sx={{ height: '100%' }}>
                             <SensorGraph sensorKey={key} title={getSensorName(key)} />
                           </Grid>
@@ -580,15 +560,8 @@ function App() {
                   <Box className="sensor-cards-container">
                     {[0, 1, 2].map((rowIdx) => (
                       <Box className="sensor-cards-row" key={rowIdx}>
-                        {sensorKeys.slice(rowIdx * 2, rowIdx * 2 + 2).map((key) => {
-                          let status;
-                          if (key === 'temperature') status = getStatus(averageSensorData[key], 20, 25);
-                          else if (key === 'humidity') status = getStatus(averageSensorData[key], 70, 80);
-                          else if (key === 'ldrValue') status = getStatus(averageSensorData[key], 400, 600, true);
-                          else if (key === 'rainValue') status = getStatus(averageSensorData[key], 880, 940, true);
-                          else if (key === 'airQualityPPM') status = getStatus(averageSensorData[key], 400, 800);
-                          else if (key === 'soilMoisture') status = getStatus(averageSensorData[key], 200, 400);
-                          else status = 'medium';
+                        {Object.keys(sensorData).slice(rowIdx * 2, rowIdx * 2 + 2).map((key) => {
+                          const status = getSensorStatus(key, averageSensorData[key]);
                           return (
                             <Box sx={{ flex: 1 }} key={key}>
                               <SensorCard

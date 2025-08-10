@@ -190,17 +190,18 @@ code {
   min-height: 120px;
 }
 
+/* Disable animations for better performance */
 canvas {
-  animation: none !important;
-  transition: none !important;
+  animation: none;
+  transition: none;
 }
 
 .sensor-card {
-  transition: none !important;
+  transition: none;
 }
 
 .sensor-card:hover {
-  transform: none !important;
+  transform: none;
 }
 
 .MuiPaper-root:not(.MuiPopover-paper),
@@ -209,43 +210,23 @@ canvas {
 .MuiTableRow-root,
 .MuiTableCell-root,
 .MuiTooltip-root {
-  transition: none !important;
-  animation: none !important;
+  transition: none;
+  animation: none;
 }
 
+/* Optimized Material-UI transitions */
 .MuiSelect-root,
 .MuiTextField-root,
 .MuiFormControl-root {
-  transition: all 0.2s ease !important;
+  transition: all 0.2s ease;
 }
 
 .MuiSelect-root:hover .MuiOutlinedInput-notchedOutline,
 .MuiTextField-root:hover .MuiOutlinedInput-notchedOutline {
-  border-color: #1976d2 !important;
+  border-color: #1976d2;
 }
 
 .MuiMenuItem-root:hover {
-  background-color: rgba(25, 118, 210, 0.08) !important;
-  transition: background-color 0.2s ease !important;
-}
-
-.MuiSelect-select {
-  transition: none !important;
-}
-
-.MuiPopover-root {
-  transition: none !important;
-}
-
-.MuiPaper-root.MuiPopover-paper {
-  transition: none !important;
-  animation: none !important;
-}
-
-.MuiSelect-select:focus {
-  transition: none !important;
-}
-
-.MuiSelect-select:focus + .MuiSelect-icon {
-  transition: none !important;
+  background-color: rgba(25, 118, 210, 0.08);
+  transition: background-color 0.2s ease;
 } 

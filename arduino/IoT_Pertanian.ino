@@ -55,10 +55,10 @@ enum ErrorCode {
 };
 
 // WiFi and Server Settings
-const char* ssid = "SmartRoomPrototype";
-const char* password = "Binus123!";
-const char* server = "10.37.35.69";
-const int port = 3001;  
+const char* ssid = "VivoV23";
+const char* password = "1357924680";
+const char* server = "10.108.206.183";
+const int port = 3001;
 
 // HTTP client
 WiFiClient wifi;
@@ -103,7 +103,7 @@ struct SensorData {
 
 // Add display mode tracking
 byte displayMode = 0;
-const byte NUM_DISPLAY_MODES = 6;
+const byte NUM_DISPLAY_MODES = 7;
 
 // Add watering control variables
 unsigned long pumpStartTime = 0;
@@ -113,6 +113,14 @@ const unsigned long MAX_PUMP_DURATION = 30000;
 // Add state execution flags to prevent multiple executions
 bool sensorsReadThisCycle = false;
 bool dataSentThisCycle = false;
+
+// Add initialization flag
+bool systemInitialized = false;
+
+// Function declarations
+void performInitialSensorReading();
+bool testServerConnectivity();
+bool validateSensorData();
 
 // Function to get status text based on sensor value with inversion parameter
 const char* getSensorStatus(int value, int lowThreshold, int mediumThreshold, bool invertLogic = false) {
@@ -291,6 +299,195 @@ void controlWatering() {
   }
 }
 
+// Function to perform initial sensor reading before starting normal operation
+void performInitialSensorReading() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(F("Initial Reading"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("Please wait..."));
+  
+  Serial.println(F("\n=== INITIAL SENSOR READING ==="));
+  
+  // Wait a moment for sensors to stabilize
+  delay(2000);
+  
+  // Read all sensors multiple times to get stable readings
+  float tempSum = 0;
+  float humiditySum = 0;
+  int ldrSum = 0;
+  int rainSum = 0;
+  int airSum = 0;
+  int soilSum = 0;
+  int validReadings = 0;
+  
+  const int NUM_READINGS = 5;
+  
+  for (int i = 0; i < NUM_READINGS; i++) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(F("Reading sensors"));
+    lcd.setCursor(0, 1);
+    lcd.print(F("Sample "));
+    lcd.print(i + 1);
+    lcd.print(F("/"));
+    lcd.print(NUM_READINGS);
+    
+    // Read DHT sensor
+    float temp = dht.readTemperature();
+    float humidity = dht.readHumidity();
+    
+    if (!isnan(temp) && !isnan(humidity)) {
+      tempSum += temp;
+      humiditySum += humidity;
+      validReadings++;
+    }
+    
+    // Read other sensors
+    ldrSum += analogRead(LDRPIN);
+    rainSum += analogRead(RAINPIN);
+    airSum += analogRead(MQ135PIN);
+    soilSum += analogRead(SOILPIN);
+    
+    delay(1000); // Wait between readings
+    WDT.refresh();
+  }
+  
+  // Calculate averages
+  if (validReadings > 0) {
+    sensorData.temperature = tempSum / validReadings;
+    sensorData.humidity = humiditySum / validReadings;
+    currentError = ERROR_NONE;
+  } else {
+    sensorData.temperature = 0;
+    sensorData.humidity = 0;
+    currentError = ERROR_DHT;
+  }
+  
+  sensorData.ldrValue = ldrSum / NUM_READINGS;
+  sensorData.rainValue = rainSum / NUM_READINGS;
+  sensorData.airQuality = airSum / NUM_READINGS;
+  sensorData.soilMoisture = soilSum / NUM_READINGS;
+  
+  // Set timestamp
+  if (timeInitialized) {
+    sensorData.timestamp = timeClient.getEpochTime();
+  } else {
+    sensorData.timestamp = millis() / 1000;
+  }
+  
+  // Display initial readings
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(F("Initial Readings:"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("Temp: "));
+  lcd.print(sensorData.temperature, 1);
+  lcd.print(F("C"));
+  delay(3000);
+  
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(F("Humidity: "));
+  lcd.print(sensorData.humidity, 1);
+  lcd.print(F("%"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("Soil: "));
+  lcd.print(sensorData.soilMoisture);
+  delay(3000);
+  
+  // Log initial sensor data to serial
+  getFormattedTime(timeStampBuffer, sizeof(timeStampBuffer));
+  Serial.print(F("Initial Timestamp: "));
+  Serial.println(timeStampBuffer);
+  
+  snprintf(msgBuffer, sizeof(msgBuffer), "Initial Temperature  : %.1f°C", sensorData.temperature);
+  Serial.println(msgBuffer);
+  
+  snprintf(msgBuffer, sizeof(msgBuffer), "Initial Humidity     : %.1f%%", sensorData.humidity);
+  Serial.println(msgBuffer);
+  
+  snprintf(msgBuffer, sizeof(msgBuffer), "Initial Light Level  : %d (%s)", 
+          sensorData.ldrValue, getSensorStatus(sensorData.ldrValue, LIGHT_LOW, LIGHT_MEDIUM, true));
+  Serial.println(msgBuffer);
+  
+  snprintf(msgBuffer, sizeof(msgBuffer), "Initial Rain Level   : %d (%s)", 
+          sensorData.rainValue, getSensorStatus(sensorData.rainValue, RAIN_LOW, RAIN_MEDIUM, true));
+  Serial.println(msgBuffer);
+  
+  snprintf(msgBuffer, sizeof(msgBuffer), "Initial Air Quality  : %d (%s)", 
+          sensorData.airQuality, getSensorStatus(sensorData.airQuality, AIR_QUALITY_LOW, AIR_QUALITY_MEDIUM, false));
+  Serial.println(msgBuffer);
+  
+  snprintf(msgBuffer, sizeof(msgBuffer), "Initial Soil Moisture: %d (%s)", 
+          sensorData.soilMoisture, getSensorStatus(sensorData.soilMoisture, SOIL_LOW, SOIL_MEDIUM, false));
+  Serial.println(msgBuffer);
+  
+  Serial.println(F("=== INITIAL SENSOR READING COMPLETE ===\n"));
+  
+  // Mark system as initialized
+  systemInitialized = true;
+  
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(F("System Ready!"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("Starting normal op"));
+  delay(2000);
+}
+
+// Function to validate sensor data before sending
+bool validateSensorData() {
+  // Check if temperature is valid (not NaN, not 0, and within reasonable range)
+  if (isnan(sensorData.temperature) || sensorData.temperature == 0 || 
+      sensorData.temperature < -40 || sensorData.temperature > 80) {
+    Serial.println(F("Validation failed: Temperature is invalid, 0, or out of range"));
+    currentError = ERROR_DHT;
+    return false;
+  }
+  
+  // Check if humidity is valid (not NaN, not 0, and within reasonable range)
+  if (isnan(sensorData.humidity) || sensorData.humidity == 0 || 
+      sensorData.humidity < 0 || sensorData.humidity > 100) {
+    Serial.println(F("Validation failed: Humidity is invalid, 0, or out of range"));
+    currentError = ERROR_DHT;
+    return false;
+  }
+  
+  // Check if LDR value is valid (not 0 and within reasonable range)
+  if (sensorData.ldrValue == 0 || sensorData.ldrValue > 1023) {
+    Serial.println(F("Validation failed: LDR value is 0 or out of range"));
+    currentError = ERROR_LDR;
+    return false;
+  }
+  
+  // Check if rain sensor value is valid (not 0 and within reasonable range)
+  if (sensorData.rainValue == 0 || sensorData.rainValue > 1023) {
+    Serial.println(F("Validation failed: Rain sensor value is 0 or out of range"));
+    currentError = ERROR_RAIN;
+    return false;
+  }
+  
+  // Check if air quality value is valid (not 0 and within reasonable range)
+  if (sensorData.airQuality == 0 || sensorData.airQuality > 1023) {
+    Serial.println(F("Validation failed: Air quality value is 0 or out of range"));
+    currentError = ERROR_AIR;
+    return false;
+  }
+  
+  // Check if soil moisture value is valid (not 0 and within reasonable range)
+  if (sensorData.soilMoisture == 0 || sensorData.soilMoisture > 1023) {
+    Serial.println(F("Validation failed: Soil moisture value is 0 or out of range"));
+    currentError = ERROR_SOIL;
+    return false;
+  }
+  
+  // All sensors have valid values
+  Serial.println(F("All sensor values are valid"));
+  currentError = ERROR_NONE;
+  return true;
+}
+
 void setup() {
   Serial.begin(115200);
   
@@ -375,13 +572,21 @@ void setup() {
   lcd.setCursor(0, 0);
   lcd.print(F("System Ready"));
   lcd.setCursor(0, 1);
-  lcd.print(F("Starting..."));
+  lcd.print(F("Reading sensors..."));
   delay(2000);
+  
+  // Perform initial sensor reading before starting normal operation
+  performInitialSensorReading();
 }
 
 void loop() {
   // Refresh watchdog timer to prevent reset
   WDT.refresh();
+  
+  // Only start normal operation after initial sensor reading is complete
+  if (!systemInitialized) {
+    return;
+  }
   
   // Check if it's time to change state
   if (millis() - lastStateChangeTime >= STATE_DURATION) {
@@ -552,12 +757,49 @@ void loop() {
             lcd.print(F("Check WiFi/NTP"));
           }
           break;
+          
+        case 6:  // Sensor Validation Status
+          lcd.setCursor(0, 0);
+          lcd.print(F("Sensor Status:"));
+          lcd.setCursor(0, 1);
+          if (currentError == ERROR_NONE) {
+            lcd.print(F("ALL OK"));
+          } else {
+            switch (currentError) {
+              case ERROR_DHT:
+                lcd.print(F("TEMP/HUMID"));
+                break;
+              case ERROR_LDR:
+                lcd.print(F("LIGHT SENSOR"));
+                break;
+              case ERROR_RAIN:
+                lcd.print(F("RAIN SENSOR"));
+                break;
+              case ERROR_AIR:
+                lcd.print(F("AIR QUALITY"));
+                break;
+              case ERROR_SOIL:
+                lcd.print(F("SOIL SENSOR"));
+                break;
+              default:
+                lcd.print(F("SENSOR ERROR"));
+                break;
+            }
+          }
+          break;
       }
       break;
       
     case STATE_SEND_DATA:
       // Send data only once per cycle
       if (!dataSentThisCycle && WiFi.status() == WL_CONNECTED) {
+        // Validate sensor data before sending
+        if (!validateSensorData()) {
+          Serial.println(F("Skipping data send - Invalid sensor values detected"));
+          dataSentThisCycle = true;
+          break;
+        }
+        
         // Prepare JSON data
         StaticJsonDocument<512> doc;
         
@@ -577,14 +819,32 @@ void loop() {
         Serial.println(F("Sending JSON data:"));
         Serial.println(jsonData);
         
-        // Set up HTTP request with timeout
-        http.setTimeout(5000);
+        // Print server connection info for debugging
+        Serial.print(F("Connecting to server: "));
+        Serial.print(server);
+        Serial.print(F(":"));
+        Serial.println(port);
+        
+        // Set up HTTP request with increased timeout and better error handling
+        http.setTimeout(10000); // Increase timeout to 10 seconds
+        
+        // Test server connectivity first
+        Serial.println(F("Testing server connectivity..."));
+        if (!wifi.connect(server, port)) {
+          Serial.println(F("Failed to connect to server"));
+          currentError = ERROR_SERVER;
+          dataSentThisCycle = true;
+          break;
+        }
+        
+        Serial.println(F("Server connection successful, sending data..."));
         
         // Set up HTTP request
         http.beginRequest();
         http.post("/api/sensors/data");
         http.sendHeader("Content-Type", "application/json");
         http.sendHeader("Content-Length", jsonData.length());
+        http.sendHeader("Connection", "close"); // Add connection close header
         http.write((const uint8_t*)jsonData.c_str(), jsonData.length());
         http.endRequest();
         
@@ -597,6 +857,7 @@ void loop() {
         Serial.print(F("Response: "));
         Serial.println(response);
         
+        // Handle different status codes
         if (statusCode == 200) {
           Serial.println(F("Data sent successfully"));
           currentError = ERROR_NONE;
@@ -615,6 +876,19 @@ void loop() {
               Serial.println(errorDoc["message"].as<const char*>());
             }
           }
+        } else if (statusCode == -3) {
+          Serial.println(F("Connection timeout - Server may be unreachable"));
+          Serial.println(F("Check if server is running and accessible"));
+          currentError = ERROR_SERVER;
+        } else if (statusCode == -1) {
+          Serial.println(F("Connection failed - Check server address and port"));
+          currentError = ERROR_SERVER;
+        } else if (statusCode == 404) {
+          Serial.println(F("Endpoint not found - Check API endpoint path"));
+          currentError = ERROR_SERVER;
+        } else if (statusCode == 0) {
+          Serial.println(F("No response received - Server may be down"));
+          currentError = ERROR_SERVER;
         } else {
           Serial.print(F("HTTP request failed with status: "));
           Serial.println(statusCode);
@@ -622,6 +896,9 @@ void loop() {
           Serial.println(response);
           currentError = ERROR_SERVER;
         }
+        
+        // Close the connection
+        wifi.stop();
         
         dataSentThisCycle = true;
       } else if (!dataSentThisCycle && WiFi.status() != WL_CONNECTED) {
